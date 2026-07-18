@@ -76,16 +76,20 @@ def _register_race_camera(cam, vehicle_id: int) -> None:
     sid = cam.id
     sensors[sid] = {"actor": cam, "subscribers": set(), "latest_jpeg": None}
     vehicle_to_sensor[vehicle_id] = sid
+    print(f"[race cam] registered sensor {sid} for vehicle {vehicle_id}", flush=True)
 
     def cb(image):
-        arr = np.frombuffer(image.raw_data, dtype=np.uint8).reshape(
-            (image.height, image.width, 4))[:, :, :3]
-        img = Image.fromarray(arr)
-        buf = io.BytesIO()
-        img.save(buf, format="JPEG", quality=50)
-        jpeg = buf.getvalue()
-        sensors[sid]["latest_jpeg"] = jpeg
-        _broadcast(sid, jpeg)
+        try:
+            arr = np.frombuffer(image.raw_data, dtype=np.uint8).reshape(
+                (image.height, image.width, 4))[:, :, :3]
+            img = Image.fromarray(arr)
+            buf = io.BytesIO()
+            img.save(buf, format="JPEG", quality=50)
+            jpeg = buf.getvalue()
+            sensors[sid]["latest_jpeg"] = jpeg
+            _broadcast(sid, jpeg)
+        except Exception as e:
+            print(f"[race cam] cb error sensor {sid}: {e!r}", flush=True)
 
     cam.listen(cb)
 
