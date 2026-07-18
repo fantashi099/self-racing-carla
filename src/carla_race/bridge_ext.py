@@ -25,6 +25,7 @@ from fastapi import APIRouter, HTTPException
 
 from carla_race.config import RaceConfig, load_config
 from carla_race.race_manager import RaceManager
+from carla_race.race_state import RaceState
 
 __all__ = ["init_race_manager", "race_router", "spawn_player_camera"]
 
@@ -134,10 +135,18 @@ def _register_camera_callback(cam: Any, sid: int) -> None:
 @race_router.post("/start")
 def start_race() -> dict[str, Any]:
     rm = _get_rm()
+    rs: RaceState
     try:
         rs = rm.start()
     except RuntimeError as exc:
-        raise HTTPException(status_code=409, detail=str(exc)) from exc
+        msg = str(exc)
+        if "already running" not in msg:
+            raise HTTPException(status_code=409, detail=msg) from exc
+        current = getattr(rm, "current_state", None)
+        existing = current() if callable(current) else None
+        if existing is None:
+            raise HTTPException(status_code=409, detail=msg) from exc
+        rs = existing
     client = _get_client()
     world = client.get_world()
     player = rs.player()

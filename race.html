@@ -63,6 +63,7 @@ const WS  = prefix.replace(/^https?:/, 'wss:').replace(/^http:/, 'ws:').replace(
 
 let vid = null, sensorId = null, ws = null;
 let raceState = null;
+let _starting = false;
 const ctrl = {throttle:0, steer:0, brake:0, reverse:false, hand_brake:false};
 const keys = new Set();
 let lastFrame = performance.now();
@@ -75,6 +76,8 @@ function showErr(msg, retry){
 function hideErr(){ $('#err').style.display = 'none'; }
 
 async function startRace(){
+  if (_starting) return;
+  _starting = true;
   hideErr();
   try {
     const r = await fetch(`${API}/race/start`, {method:'POST'});
@@ -94,6 +97,8 @@ async function startRace(){
     startLoop();
   } catch(err){
     showErr('start error: ' + err, true);
+  } finally {
+    _starting = false;
   }
 }
 

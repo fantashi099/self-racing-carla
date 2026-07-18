@@ -60,52 +60,59 @@ class RaceManager:
     def start(self) -> RaceState:
         if self._state is not None and self._state.phase == RacePhase.RUNNING:
             raise RuntimeError("race already running; call stop or restart first")
-        name, carla_map = pick_and_load(self._client)
-        world = self._client.get_world()
-        self._circuit = build_circuit(carla_map)
-        self._spawns = spawn_grid(world, num_cars=self._config.num_cars)
-        self._car_actors = {
-            s.actor_id: world.get_actor(s.actor_id) for s in self._spawns
-        }
-        cars: dict[int, CarState] = {
-            s.actor_id: CarState(
-                actor_id=s.actor_id, is_player=s.is_player, color=s.color
+        try:
+            name, carla_map = pick_and_load(self._client)
+            world = self._client.get_world()
+            self._circuit = build_circuit(carla_map)
+            self._spawns = spawn_grid(world, num_cars=self._config.num_cars)
+            self._car_actors = {
+                s.actor_id: world.get_actor(s.actor_id) for s in self._spawns
+            }
+            cars: dict[int, CarState] = {
+                s.actor_id: CarState(
+                    actor_id=s.actor_id, is_player=s.is_player, color=s.color
+                )
+                for s in self._spawns
+            }
+            self._state = RaceState(
+                config_num_cars=self._config.num_cars,
+                config_num_laps=self._config.num_laps,
+                phase=RacePhase.RUNNING,
+                started_at_s=self._now(),
+                map_name=name,
+                cars=cars,
+                circuit_waypoint_count=len(self._circuit),
             )
-            for s in self._spawns
-        }
-        self._state = RaceState(
-            config_num_cars=self._config.num_cars,
-            config_num_laps=self._config.num_laps,
-            phase=RacePhase.RUNNING,
-            started_at_s=self._now(),
-            map_name=name,
-            cars=cars,
-            circuit_waypoint_count=len(self._circuit),
-        )
-        self._sensor_ids = attach_collision_sensors(
-            world, self._car_actors, cars, lock=self._lock
-        )
-        if self._config.num_walkers > 0:
-            self._walkers = spawn_walkers(world, num_walkers=self._config.num_walkers)
-        player_spawn = next((s for s in self._spawns if s.is_player), None)
-        player_id = player_spawn.actor_id if player_spawn is not None else -1
-        tm = self._get_traffic_manager()
-        setup_ai_cars(
-            tm,
-            self._car_actors,
-            carla_map,
-            self._circuit,
-            difficulty=self._config.ai_difficulty,
-            player_actor_id=player_id,
-        )
-        tm_port = _tm_port(tm)
-        for s in self._spawns:
-            if s.is_player:
-                continue
-            actor = self._car_actors.get(s.actor_id)
-            if actor is not None:
-                _enable_autopilot(actor, tm_port)
-        self._next_finish_pos = 1
+            self._sensor_ids = attach_collision_sensors(
+                world, self._car_actors, cars, lock=self._lock
+            )
+            if self._config.num_walkers > 0:
+                self._walkers = spawn_walkers(world, num_walkers=self._config.num_walkers)
+            player_spawn = next((s for s in self._spawns if s.is_player), None)
+            player_id = player_spawn.actor_id if player_spawn is not None else -1
+            tm = self._get_traffic_manager()
+            setup_ai_cars(
+                tm,
+                self._car_actors,
+                carla_map,
+                self._circuit,
+                difficulty=self._config.ai_difficulty,
+                player_actor_id=player_id,
+            )
+            tm_port = _tm_port(tm)
+            for s in self._spawns:
+                if s.is_player:
+                    continue
+                actor = self._car_actors.get(s.actor_id)
+                if actor is not None:
+                    _enable_autopilot(actor, tm_port)
+            self._next_finish_pos = 1
+            return self._state
+        except Exception:
+            self.destroy()
+            raise
+
+    def current_state(self) -> RaceState | None:
         return self._state
 
     def tick(self) -> RaceState | None:
