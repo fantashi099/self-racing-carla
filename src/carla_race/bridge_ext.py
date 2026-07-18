@@ -32,6 +32,7 @@ race_router = APIRouter(prefix="/race")
 
 _race_manager: RaceManager | None = None
 _client: Any = None
+_register_camera_fn: Any = None
 
 CAMERA_BP = "sensor.camera.rgb"
 DEFAULT_CAM_WIDTH = 800
@@ -42,9 +43,14 @@ DEFAULT_CAM_Y = 0.0
 DEFAULT_CAM_Z = 2.5  # above the car
 
 
-def init_race_manager(client: Any, config: RaceConfig | None = None) -> None:
-    global _race_manager, _client
+def init_race_manager(
+    client: Any,
+    config: RaceConfig | None = None,
+    register_camera: Any = None,
+) -> None:
+    global _race_manager, _client, _register_camera_fn
     _client = client
+    _register_camera_fn = register_camera
     if config is None:
         config = load_config()
     _race_manager = RaceManager(client, config)
@@ -82,7 +88,10 @@ def spawn_player_camera(
     transform = _make_camera_transform(DEFAULT_CAM_X, DEFAULT_CAM_Y, DEFAULT_CAM_Z)
     cam = world.spawn_actor(bp, transform, attach_to=player_actor)
     sid = cam.id
-    _register_camera_callback(cam, sid)
+    if _register_camera_fn is not None:
+        _register_camera_fn(cam, player_actor.id)
+    else:
+        _register_camera_callback(cam, sid)
     return {
         "sensor_id": sid,
         "ws_path": f"/stream/{sid}",

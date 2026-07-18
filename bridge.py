@@ -72,6 +72,24 @@ async def _startup():
     _loop = asyncio.get_event_loop()
 
 
+def _register_race_camera(cam, vehicle_id: int) -> None:
+    sid = cam.id
+    sensors[sid] = {"actor": cam, "subscribers": set(), "latest_jpeg": None}
+    vehicle_to_sensor[vehicle_id] = sid
+
+    def cb(image):
+        arr = np.frombuffer(image.raw_data, dtype=np.uint8).reshape(
+            (image.height, image.width, 4))[:, :, :3]
+        img = Image.fromarray(arr)
+        buf = io.BytesIO()
+        img.save(buf, format="JPEG", quality=50)
+        jpeg = buf.getvalue()
+        sensors[sid]["latest_jpeg"] = jpeg
+        _broadcast(sid, jpeg)
+
+    cam.listen(cb)
+
+
 # ── browser canvas client (Option 3) ───────────────────────
 _DRIVE_HTML = Path(__file__).with_name("index.html")
 _RACE_HTML = Path(__file__).with_name("race.html")
@@ -95,7 +113,7 @@ def race_page():
 # ── race mode router (F9) ─────────────────────────────────
 from carla_race.bridge_ext import init_race_manager, race_router  # noqa: E402
 
-init_race_manager(client)
+init_race_manager(client, register_camera=_register_race_camera)
 app.include_router(race_router)
 
 
@@ -194,10 +212,14 @@ def get_frame(sensor_id: int):
 @app.post("/step/{vid}")
 def step(vid: int, body: dict):
     """Combined: apply vehicle control + return latest camera JPEG + speed header.
-    One round-trip per cycle instead of two. Speed in `X-Speed-Kmh` header."""
+    One round-trip per cycle instead of two. Speed in `X-Speed-Kmh` header.
+    Race cars (spawned by race_manager, not /spawn/vehicle) resolve via world.get_actor."""
     v = vehicles.get(vid)
     if v is None:
-        return JSONResponse({"error": f"vehicle {vid} not found"}, status_code=404)
+        w = client.get_world()
+        v = w.get_actor(vid)
+        if v is None:
+            return JSONResponse({"error": f"vehicle {vid} not found"}, status_code=404)
     ctrl = carla.VehicleControl(
         throttle=float(body.get("throttle", 0.0)),
         steer=float(body.get("steer", 0.0)),
