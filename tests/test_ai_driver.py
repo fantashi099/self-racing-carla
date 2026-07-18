@@ -205,3 +205,60 @@ def test_setup_ai_cars_preserves_call_order_hybrid_first() -> None:
     # First getattr-driven call should be a preset key, not set_path
     first_getattr_call = tm.calls[0][0]
     assert first_getattr_call != "set_path"
+
+
+def test_setup_ai_cars_skips_missing_tm_methods(capfd: pytest.CaptureFixture[str]) -> None:
+    """TM methods that don't exist (CARLA version mismatch) are skipped with
+    a one-time warning listing the available set_ methods."""
+    # Reset the module-level warning cache so the warning fires in this test.
+    from carla_race import ai_driver as mod
+    mod._warned_missing.clear()
+
+    class PartialTM:
+        def __init__(self) -> None:
+            self.hybrid_physics_mode: list[bool] = []
+            self.paths: dict[int, list[Any]] = {}
+
+        def set_hybrid_physics_mode(self, enabled: bool) -> None:
+            self.hybrid_physics_mode.append(enabled)
+
+        def set_path(self, actor_id: int, path: list[Any]) -> None:
+            self.paths[actor_id] = path
+
+        # NOTE: no set_percentage_speed_difference, set_global_distance_to_leading_vehicle,
+        # set_auto_lane_change, set_safety_mode — version-mismatch simulation
+
+    tm = PartialTM()
+    setup_ai_cars(
+        tm,
+        car_actor_ids=[1],
+        circuit=["wp"],
+        difficulty="normal",
+        player_actor_id=999,
+    )
+    # hybrid physics + set_path still applied
+    assert tm.hybrid_physics_mode == [True]
+    assert tm.paths == {1: ["wp"]}
+    # warning was printed to stderr
+    captured = capfd.readouterr()
+    assert "TM has no set_percentage_speed_difference" in captured.err
+    assert "Available set_ methods" in captured.err
+
+
+def test_setup_ai_cars_missing_method_warning_emitted_once(
+    capfd: pytest.CaptureFixture[str],
+) -> None:
+    from carla_race import ai_driver as mod
+    mod._warned_missing.clear()
+
+    class PartialTM:
+        def set_hybrid_physics_mode(self, enabled: bool) -> None: pass
+        def set_path(self, actor_id: int, path: list[Any]) -> None: pass
+
+    tm = PartialTM()
+    # Apply 3 AI cars — missing-method warning should fire once per key, not 3x
+    setup_ai_cars(tm, car_actor_ids=[1, 2, 3], circuit=["wp"], difficulty="normal", player_actor_id=999)
+    captured = capfd.readouterr()
+    # 4 preset keys → 4 warnings (one per missing key)
+    err_lines = [l for l in captured.err.splitlines() if "TM has no" in l]
+    assert len(err_lines) == 4
