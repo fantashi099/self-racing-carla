@@ -1,0 +1,253 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,user-scalable=no">
+<title>CARLA Race</title>
+<style>
+  html,body{margin:0;padding:0;background:#111;color:#eee;font:14px/1.4 system-ui,sans-serif;overflow:hidden;height:100%}
+  #wrap{position:relative;width:100vw;height:100vh;display:flex;align-items:center;justify-content:center}
+  canvas{max-width:100%;max-height:100%;background:#000;display:block}
+  #hud{position:absolute;top:8px;left:8px;background:rgba(0,0,0,.6);padding:8px 12px;border-radius:8px;font-variant-numeric:tabular-nums;min-width:180px}
+  #hud b{color:#7ec}
+  #hud .row{display:flex;justify-content:space-between;gap:12px}
+  #hud .big{font-size:18px;font-weight:700;color:#fff}
+  #clock{color:#fd6;font-weight:700}
+  #splits{font-size:12px;color:#aaa;margin-top:4px;max-height:80px;overflow-y:auto}
+  #splits div{display:flex;justify-content:space-between}
+  #bar{position:absolute;bottom:0;left:0;right:0;display:flex;justify-content:center;gap:10px;padding:8px;background:rgba(0,0,0,.4)}
+  #bar button{flex:0 0 auto;padding:10px 14px;border:0;border-radius:6px;background:#333;color:#eee;font:600 14px system-ui;touch-action:none}
+  #bar button:active{background:#555}
+  .go{background:#2a6!important;color:#fff}
+  .brk{background:#c33!important;color:#fff}
+  #help{position:absolute;top:8px;right:8px;background:rgba(0,0,0,.6);padding:6px 10px;border-radius:6px;font-size:12px;text-align:right}
+  #leaderboard{position:absolute;top:8px;right:8px;background:rgba(0,0,0,.6);padding:8px 12px;border-radius:8px;font-size:13px;min-width:160px;margin-top:60px}
+  #leaderboard h3{margin:0 0 6px;font-size:13px;color:#7ec}
+  #leaderboard .row{display:flex;justify-content:space-between;gap:8px;padding:2px 0}
+  #leaderboard .me{color:#fd6;font-weight:700}
+  #leaderboard .pos{color:#aaa;width:24px;text-align:right}
+  #err{position:absolute;inset:0;display:none;align-items:center;justify-content:center;background:rgba(0,0,0,.85);text-align:center;padding:20px;font-size:16px}
+  #err button{margin-top:12px;padding:8px 16px;border:0;border-radius:6px;background:#2a6;color:#fff;font:600 14px system-ui}
+</style>
+</head>
+<body>
+<div id="wrap">
+  <canvas id="c" width="800" height="450"></canvas>
+  <div id="hud">
+    <div class="row"><span>Lap</span><b id="lap" class="big">0/0</b></div>
+    <div class="row"><span>Time</span><b id="clock">00:00.0</b></div>
+    <div class="row"><span>Score</span><b id="score">0</b></div>
+    <div class="row"><span>Pos</span><b id="pos">--/0</b></div>
+    <div id="splits"></div>
+  </div>
+  <div id="leaderboard">
+    <h3>Leaderboard</h3>
+    <div id="board"></div>
+  </div>
+  <div id="help">WASD/Arrows · Space brake · R restart · Enter start</div>
+  <div id="bar">
+    <button data-k="up" class="go">▲ Throttle</button>
+    <button data-k="left">◀ Steer L</button>
+    <button data-k="right">Steer R ▶</button>
+    <button data-k="down" class="brk">▼ Brake</button>
+  </div>
+  <div id="err"></div>
+</div>
+<script>
+const $ = s => document.querySelector(s);
+const canvas = $('#c'), ctx = canvas.getContext('2d');
+const params = new URLSearchParams(location.search);
+const prefix = params.get('host') || (location.origin + location.pathname.replace(/\/race\/?$/, ''));
+const API = prefix.replace(/^wss?:/, 'http:').replace(/\/$/, '');
+const WS  = prefix.replace(/^https?:/, 'wss:').replace(/^http:/, 'ws:').replace(/\/$/, '');
+
+let vid = null, sensorId = null, ws = null;
+let raceState = null;
+const ctrl = {throttle:0, steer:0, brake:0, reverse:false, hand_brake:false};
+const keys = new Set();
+let lastFrame = performance.now();
+
+function showErr(msg, retry){
+  const e = $('#err');
+  e.style.display = 'flex';
+  e.innerHTML = msg + (retry ? '<br><button onclick="startRace()">Retry</button>' : '');
+}
+function hideErr(){ $('#err').style.display = 'none'; }
+
+async function startRace(){
+  hideErr();
+  try {
+    const r = await fetch(`${API}/race/start`, {method:'POST'});
+    if (!r.ok){
+      const detail = await r.text();
+      showErr(`start failed (${r.status}): ${detail}`, true);
+      return;
+    }
+    const body = await r.json();
+    vid = body.player_actor_id;
+    if (body.camera){
+      sensorId = body.camera.sensor_id;
+      openStream();
+    }
+    raceState = body;
+    paintHUD(body);
+    startLoop();
+  } catch(err){
+    showErr('start error: ' + err, true);
+  }
+}
+
+function openStream(){
+  if (ws) ws.close();
+  ws = new WebSocket(`${WS}/stream/${sensorId}`);
+  ws.binaryType = 'arraybuffer';
+  ws.onmessage = ev => {
+    const blob = new Blob([ev.data], {type:'image/jpeg'});
+    const url = URL.createObjectURL(blob);
+    const img = new Image();
+    img.onload = () => { ctx.drawImage(img,0,0,canvas.width,canvas.height); URL.revokeObjectURL(url); };
+    img.src = url;
+  };
+  ws.onclose = () => { /* /step polling still paints frames as fallback */ };
+}
+
+function fmtTime(s){
+  if (s == null || s < 0) return '00:00.0';
+  const m = Math.floor(s/60);
+  const sec = Math.floor(s%60);
+  const tenths = Math.floor((s*10)%10);
+  return `${String(m).padStart(2,'0')}:${String(sec).padStart(2,'0')}.${tenths}`;
+}
+
+function paintHUD(state){
+  if (!state) return;
+  const me = (state.cars || []).find(c => c.is_player) || {};
+  $('#lap').textContent = `${me.laps_finished || 0}/${state.num_laps || 0}`;
+  $('#clock').textContent = fmtTime(state.elapsed_s || 0);
+  $('#score').textContent = me.score || 0;
+  $('#pos').textContent = me.finish_position != null
+    ? `${me.finish_position}/${state.num_cars || 0}`
+    : `?/${state.num_cars || 0}`;
+  // splits
+  const splitsEl = $('#splits');
+  splitsEl.innerHTML = '';
+  // leaderboard
+  const board = $('#board');
+  board.innerHTML = '';
+  (state.cars || []).forEach(c => {
+    const row = document.createElement('div');
+    row.className = 'row' + (c.is_player ? ' me' : '');
+    const pos = c.finish_position != null ? c.finish_position : '-';
+    row.innerHTML = `<span class="pos">${pos}</span><span>${c.is_player ? 'YOU' : 'AI'}</span><span>L${c.laps_finished || 0}</span>`;
+    board.appendChild(row);
+  });
+}
+
+async function pollState(){
+  if (!vid) return;
+  try {
+    const r = await fetch(`${API}/race/state`);
+    if (r.ok){
+      const state = await r.json();
+      raceState = state;
+      paintHUD(state);
+      if (state.phase === 'finished'){
+        stopLoop();
+        showErr(`Race finished! Your position: ${(state.cars||[]).find(c=>c.is_player)?.finish_position}`, true);
+      }
+    }
+  } catch(e){ /* ignore transient */ }
+}
+
+async function stepLoop(){
+  if (!vid) return;
+  updateCtrl();
+  try {
+    const r = await fetch(`${API}/step/${vid}`, {
+      method:'POST', headers:{'content-type':'application/json'},
+      body: JSON.stringify(ctrl)
+    });
+    if (r.status === 404){
+      // vehicle lost — restart race
+      console.warn('vehicle lost, restarting race');
+      stopLoop();
+      await restartRace();
+      return;
+    }
+    if (r.ok){
+      const buf = await r.arrayBuffer();
+      const blob = new Blob([buf], {type:'image/jpeg'});
+      const url = URL.createObjectURL(blob);
+      const img = new Image();
+      img.onload = () => { ctx.drawImage(img,0,0,canvas.width,canvas.height); URL.revokeObjectURL(url); };
+      img.src = url;
+    }
+  } catch(e){ console.warn('step err', e); }
+}
+
+async function restartRace(){
+  try {
+    const r = await fetch(`${API}/race/restart`, {method:'POST'});
+    if (!r.ok){ showErr(`restart failed (${r.status})`, true); return; }
+    const body = await r.json();
+    vid = body.player_actor_id;
+    if (body.camera){
+      sensorId = body.camera.sensor_id;
+      openStream();
+    }
+    raceState = body;
+    paintHUD(body);
+    startLoop();
+    hideErr();
+  } catch(err){
+    showErr('restart error: ' + err, true);
+  }
+}
+
+function updateCtrl(){
+  let t=0, s=0, b=0;
+  if (keys.has('w') || keys.has('arrowup')    || keys.has('up'))    t = 1;
+  if (keys.has('s') || keys.has('arrowdown')  || keys.has('down'))  b = 1;
+  if (keys.has('a') || keys.has('arrowleft')  || keys.has('left'))  s = -1;
+  if (keys.has('d') || keys.has('arrowright') || keys.has('right')) s =  1;
+  if (keys.has(' ')) b = 1;
+  ctrl.throttle = t;
+  ctrl.steer    = s;
+  ctrl.brake    = b;
+  ctrl.hand_brake = keys.has('h');
+}
+
+let stepHandle = null, stateHandle = null;
+function startLoop(){
+  if (stepHandle) return;
+  stepHandle = setInterval(stepLoop, 50);   // 20Hz control
+  stateHandle = setInterval(pollState, 250); // 4Hz HUD
+}
+function stopLoop(){
+  if (stepHandle){ clearInterval(stepHandle); stepHandle = null; }
+  if (stateHandle){ clearInterval(stateHandle); stateHandle = null; }
+}
+
+addEventListener('keydown', e => {
+  const k = e.key.toLowerCase();
+  keys.add(k);
+  if (k === 'enter' && !vid) startRace();
+  if (k === 'r') restartRace();
+  e.preventDefault();
+});
+addEventListener('keyup', e => keys.delete(e.key.toLowerCase()));
+
+document.querySelectorAll('#bar button').forEach(btn => {
+  const k = btn.dataset.k;
+  const press = e => { keys.add(k); e.preventDefault(); };
+  const release = e => { keys.delete(k); e.preventDefault(); };
+  btn.addEventListener('pointerdown', press);
+  btn.addEventListener('pointerup', release);
+  btn.addEventListener('pointerleave', release);
+  btn.addEventListener('pointercancel', release);
+});
+
+startRace();
+</script>
+</body>
+</html>
