@@ -23,6 +23,7 @@ DNF cars get ``finish_position = num_cars`` (per the race_state contract).
 """
 from __future__ import annotations
 
+import contextlib
 import threading
 import time
 from typing import Any
@@ -96,6 +97,13 @@ class RaceManager:
             difficulty=self._config.ai_difficulty,
             player_actor_id=player_id,
         )
+        tm_port = _tm_port(tm)
+        for s in self._spawns:
+            if s.is_player:
+                continue
+            actor = self._car_actors.get(s.actor_id)
+            if actor is not None:
+                _enable_autopilot(actor, tm_port)
         self._next_finish_pos = 1
         return self._state
 
@@ -199,3 +207,24 @@ class RaceManager:
             except Exception:
                 return False
         return world.get_actor(actor_id) is not None
+
+
+def _tm_port(tm: Any) -> int:
+    """Best-effort read of the TrafficManager's port. CARLA's TM exposes
+    ``get_port()``; if absent, fall back to the default port the manager was
+    constructed with."""
+    get_port = getattr(tm, "get_port", None)
+    if get_port is not None:
+        with contextlib.suppress(Exception):
+            return int(get_port())
+    return DEFAULT_TM_PORT
+
+
+def _enable_autopilot(actor: Any, tm_port: int) -> None:
+    """Enable TM autopilot on an actor. Defensive: some mock actors lack
+    ``set_autopilot``; skip silently so unit tests stay CARLA-free."""
+    set_autopilot = getattr(actor, "set_autopilot", None)
+    if set_autopilot is None:
+        return
+    with contextlib.suppress(Exception):
+        set_autopilot(True, tm_port)

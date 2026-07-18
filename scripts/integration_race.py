@@ -1,19 +1,18 @@
 #!/usr/bin/env python3
-"""L2 integration smoke for F1 (map_pool) + F2 (vehicle_grid) against live CARLA.
+"""L2 integration smoke for F1-F9 against live CARLA.
 
 Contract:
 - Read CARLA_HOST / CARLA_PORT from env (default localhost:2000).
 - Auto-skip with exit 0 if CARLA unreachable or the `carla` package is missing.
 - F1 step: ``carla_race.map_pool.pick_and_load`` → assert non-empty map name.
-- F2 step: ``carla_race.vehicle_grid.spawn_grid`` on the loaded world with
-  ``num_cars=2`` → assert 2 spawns, player=index 0, distinct actor_ids + colors,
-  spawn indices [0, 1], actors resolvable in world. Then ``destroy_grid`` →
-  assert no exception.
-
-This is the additive F1+F2 slice of the full ``integration_race.py`` contract
-(2-car 1-lap race via RaceManager). Later features append their own L2 steps
-here; existing steps must keep passing. The 2-car race flow stays the end
-goal — per-feature slices build toward it.
+- F2 step: ``carla_race.vehicle_grid.spawn_grid`` + ``destroy_grid`` on the
+  loaded world with ``num_cars=2`` → assert 2 spawns, distinct ids/colors,
+  actors resolvable.
+- F3-F9 step: full 2-car 1-lap race via ``RaceManager`` (map + grid + circuit
+  + lap detection + collision sensors + AI autopilot + state snapshot).
+  Player car gets autopilot + circuit path so it finishes without a human
+  driver. Asserts phase=FINISHED, both cars have finish_position in [1, 2],
+  state_snapshot shape. Timeout 120s.
 
 Run:
     CARLA_HOST=localhost CARLA_PORT=2000 python scripts/integration_race.py
@@ -22,6 +21,7 @@ from __future__ import annotations
 
 import os
 import sys
+import time
 import traceback
 
 from dotenv import load_dotenv
@@ -122,6 +122,124 @@ def main() -> int:
         return 1
 
     print("[OK] F2 integration: destroy_grid completed without error")
+
+    # F3-F9 integration: full 2-car 1-lap race via RaceManager. Additive —
+    # exercises F1 (map), F2 (vehicle_grid), F3 (camera via /race/start), F4
+    # (ai_driver + autopilot), F6 (circuit + lap_tracker), F7 (collision
+    # sensors), F9 (race_manager FSM). F5 walkers skipped (num_walkers=0)
+    # for speed; F8 scoring is pure and unit-tested. The player car has no
+    # human driver in this smoke, so we enable TM autopilot + set_path on
+    # it too — both cars then follow the circuit and complete the lap.
+    from carla_race.config import RaceConfig
+    from carla_race.race_manager import RaceManager
+
+    race_cfg = RaceConfig(
+        num_cars=2,
+        num_laps=1,
+        num_walkers=0,
+        ai_difficulty="normal",
+    )
+    rm = RaceManager(client, race_cfg)
+    rs = None
+    try:
+        rs = rm.start()
+    except Exception:
+        print("[FAIL] RaceManager.start() raised:", file=sys.stderr)
+        traceback.print_exc()
+        return 1
+
+    player = rs.player()
+    print(
+        f"[OK] F3-F9 integration: race started map={rs.map_name!r} "
+        f"player_id={player.actor_id} cars={len(rs.cars)} "
+        f"waypoints={rs.circuit_waypoint_count}"
+    )
+
+    # Enable autopilot + circuit path on the player too so it finishes
+    # without a human driver. race_manager.start() already enabled autopilot
+    # on the AI car; the player is normally human-driven.
+    world = client.get_world()
+    tm = client.get_trafficmanager(8000)
+    try:
+        tm_port = int(tm.get_port())
+    except Exception:
+        tm_port = 8000
+    player_actor = world.get_actor(player.actor_id)
+    if player_actor is not None:
+        try:
+            player_actor.set_autopilot(True, tm_port)
+            tm.set_path(player.actor_id, rm._circuit)
+            print(f"[OK] player {player.actor_id} autopilot enabled")
+        except Exception as e:
+            print(f"[WARN] could not enable player autopilot: {e!r}", file=sys.stderr)
+
+    # Tick until FINISHED or 120s timeout.
+    deadline = time.monotonic() + 120.0
+    last_phase = None
+    while time.monotonic() < deadline:
+        rs = rm.tick()
+        if rs is None:
+            break
+        if rs.phase != last_phase:
+            last_phase = rs.phase
+            print(
+                f"[race] phase={rs.phase.value} "
+                f"player laps={player.laps_finished} wp={player.waypoint_index} "
+                f"finish={player.finish_position}"
+            )
+        if rs.phase.name == "FINISHED":
+            break
+        time.sleep(0.5)
+
+    if rs is None or rs.phase.name != "FINISHED":
+        print(
+            f"[FAIL] race did not finish within 120s "
+            f"(phase={rs.phase.value if rs else None})",
+            file=sys.stderr,
+        )
+        rm.destroy()
+        return 1
+
+    # Both cars must have a finish_position.
+    unfinished = [c for c in rs.cars.values() if c.finish_position is None]
+    if unfinished:
+        print(
+            f"[FAIL] {len(unfinished)} cars without finish_position: "
+            f"{[c.actor_id for c in unfinished]}",
+            file=sys.stderr,
+        )
+        rm.destroy()
+        return 1
+
+    positions = sorted(c.finish_position for c in rs.cars.values())
+    if positions != [1, 2]:
+        print(
+            f"[FAIL] expected finish positions [1, 2], got {positions}",
+            file=sys.stderr,
+        )
+        rm.destroy()
+        return 1
+
+    print(
+        f"[OK] F3-F9 integration: race FINISHED positions={positions} "
+        f"player_pos={player.finish_position} player_laps={player.laps_finished} "
+        f"player_hits=w{player.walker_hits}/c{player.car_hits}"
+    )
+
+    # state_snapshot shape sanity (F9).
+    snap = rm.state_snapshot()
+    if snap.get("phase") != "finished":
+        print(f"[FAIL] snapshot phase={snap.get('phase')!r}", file=sys.stderr)
+        rm.destroy()
+        return 1
+    if len(snap.get("cars", [])) != 2:
+        print(f"[FAIL] snapshot cars={len(snap.get('cars', []))}", file=sys.stderr)
+        rm.destroy()
+        return 1
+    print("[OK] F9 integration: state_snapshot shape ok")
+
+    rm.destroy()
+    print("[OK] F3-F9 integration: RaceManager.destroy() completed")
     return 0
 
 
