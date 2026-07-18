@@ -46,7 +46,13 @@ DEFAULT_TM_PORT = int(os.environ.get("RACE_TM_PORT", "8001"))
 
 
 class RaceManager:
-    def __init__(self, client: Any, config: RaceConfig) -> None:
+    def __init__(
+        self,
+        client: Any,
+        config: RaceConfig,
+        *,
+        carla_lock: Any = None,
+    ) -> None:
         self._client = client
         self._config = config
         self._state: RaceState | None = None
@@ -56,6 +62,7 @@ class RaceManager:
         self._circuit: list[Any] = []
         self._car_actors: dict[int, Any] = {}
         self._lock = threading.Lock()
+        self._carla_lock = carla_lock
         self._next_finish_pos = 1
 
     def start(self) -> RaceState:
@@ -130,7 +137,18 @@ class RaceManager:
                 car.finish_position = self._config.num_cars
                 car.finished_at_s = now
                 continue
-            tf = actor.get_transform()
+            try:
+                if self._carla_lock is not None:
+                    with self._carla_lock:
+                        tf = actor.get_transform()
+                else:
+                    tf = actor.get_transform()
+            except Exception as exc:
+                print(f"[tick] get_transform failed for {actor_id}: {exc!r}", flush=True)
+                car.dnf = True
+                car.finish_position = self._config.num_cars
+                car.finished_at_s = now
+                continue
             crossed = update_car_progress(car, tf, self._circuit)
             if crossed:
                 on_lap_complete(
@@ -212,9 +230,15 @@ class RaceManager:
         is_alive = getattr(actor, "is_alive", None)
         if is_alive is not None and callable(is_alive):
             try:
+                if self._carla_lock is not None:
+                    with self._carla_lock:
+                        return bool(is_alive())
                 return bool(is_alive())
             except Exception:
                 return False
+        if self._carla_lock is not None:
+            with self._carla_lock:
+                return world.get_actor(actor_id) is not None
         return world.get_actor(actor_id) is not None
 
 

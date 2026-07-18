@@ -45,6 +45,7 @@ vehicles: Dict[int, carla.Actor] = {}
 sensors: Dict[int, dict] = {}          # sensor_id -> {actor, subscribers, latest_jpeg}
 vehicle_to_sensor: Dict[int, int] = {} # vehicle_id -> primary camera sensor_id
 _loop: asyncio.AbstractEventLoop = None
+_carla_lock = threading.RLock()
 
 
 # ── cross-thread broadcast (CARLA sensor cb runs on its own thread) ──
@@ -117,7 +118,7 @@ def race_page():
 # ── race mode router (F9) ─────────────────────────────────
 from carla_race.bridge_ext import init_race_manager, race_router  # noqa: E402
 
-init_race_manager(client, register_camera=_register_race_camera)
+init_race_manager(client, register_camera=_register_race_camera, carla_lock=_carla_lock)
 app.include_router(race_router)
 
 print(
@@ -226,8 +227,9 @@ def step(vid: int, body: dict):
     v = vehicles.get(vid)
     if v is None:
         try:
-            w = client.get_world()
-            v = w.get_actor(vid)
+            with _carla_lock:
+                w = client.get_world()
+                v = w.get_actor(vid)
         except Exception as exc:
             print(f"[step] CARLA unreachable for vid {vid}: {exc!r}", flush=True)
             return JSONResponse(
@@ -243,8 +245,9 @@ def step(vid: int, body: dict):
             reverse=bool(body.get("reverse", False)),
             hand_brake=bool(body.get("hand_brake", False)),
         )
-        v.apply_control(ctrl)
-        speed_kmh = round(v.get_velocity().length() * 3.6, 1)
+        with _carla_lock:
+            v.apply_control(ctrl)
+            speed_kmh = round(v.get_velocity().length() * 3.6, 1)
     except Exception as exc:
         print(f"[step] control/velocity failed for vid {vid}: {exc!r}", flush=True)
         return JSONResponse(
@@ -316,11 +319,18 @@ async def stream(ws: WebSocket, sensor_id: int):
     try:
         while True:
             frame = await q.get()
-            await ws.send_bytes(frame)
-    except WebSocketDisconnect:
+            try:
+                await ws.send_bytes(frame)
+            except (WebSocketDisconnect, RuntimeError, Exception):
+                break
+    except (WebSocketDisconnect, RuntimeError, Exception):
         pass
     finally:
         sensors[sensor_id]["subscribers"].discard(q)
+        try:
+            await ws.close()
+        except Exception:
+            pass
 
 
 if __name__ == "__main__":

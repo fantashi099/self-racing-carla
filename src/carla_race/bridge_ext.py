@@ -50,13 +50,14 @@ def init_race_manager(
     client: Any,
     config: RaceConfig | None = None,
     register_camera: Any = None,
+    carla_lock: Any = None,
 ) -> None:
     global _race_manager, _client, _register_camera_fn
     _client = client
     _register_camera_fn = register_camera
     if config is None:
         config = load_config()
-    _race_manager = RaceManager(client, config)
+    _race_manager = RaceManager(client, config, carla_lock=carla_lock)
 
 
 def _get_rm() -> RaceManager:
