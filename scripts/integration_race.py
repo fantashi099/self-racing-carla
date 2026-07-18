@@ -180,9 +180,20 @@ def main() -> int:
         except Exception as e:
             print(f"[WARN] could not enable player autopilot: {e!r}", file=sys.stderr)
 
-    # Tick until FINISHED or 120s timeout.
+    # Debug: confirm build_circuit produced a real loop (not scattered spawn points)
+    if rm._circuit:
+        xs = [getattr(t.location, "x", 0.0) for t in rm._circuit]
+        ys = [getattr(t.location, "y", 0.0) for t in rm._circuit]
+        print(
+            f"[debug] circuit bounds: x=[{min(xs):.1f},{max(xs):.1f}] "
+            f"y=[{min(ys):.1f},{max(ys):.1f}] n={len(rm._circuit)} "
+            f"start=({xs[0]:.1f},{ys[0]:.1f})"
+        )
+
+    # Tick until FINISHED or 120s timeout, with rich debug every ~2s.
     deadline = time.monotonic() + 120.0
     last_phase = None
+    last_debug = 0.0
     while time.monotonic() < deadline:
         rs = rm.tick()
         if rs is None:
@@ -194,6 +205,37 @@ def main() -> int:
                 f"player laps={player.laps_finished} wp={player.waypoint_index} "
                 f"finish={player.finish_position}"
             )
+        now_mono = time.monotonic()
+        if now_mono - last_debug >= 2.0:
+            last_debug = now_mono
+            try:
+                pa = world.get_actor(player.actor_id)
+                if pa is not None:
+                    t = pa.get_transform()
+                    loc = getattr(t, "location", None)
+                    vel = None
+                    get_velocity = getattr(pa, "get_velocity", None)
+                    if get_velocity is not None:
+                        try:
+                            v = get_velocity()
+                            vel = (float(getattr(v, "x", 0.0)) ** 2 + float(getattr(v, "y", 0.0)) ** 2) ** 0.5
+                        except Exception:
+                            pass
+                    cx = rm._circuit[player.waypoint_index]
+                    cx_loc = getattr(cx, "location", None)
+                    dist_wp = (
+                        (float(getattr(loc, "x", 0.0)) - float(getattr(cx_loc, "x", 0.0))) ** 2
+                        + (float(getattr(loc, "y", 0.0)) - float(getattr(cx_loc, "y", 0.0))) ** 2
+                    ) ** 0.5 if loc is not None and cx_loc is not None else -1.0
+                    speed_str = f"{vel:.1f}" if vel is not None else "NA"
+                    print(
+                        f"[debug] t={now_mono - (deadline - 120.0):.1f}s "
+                        f"pos=({float(getattr(loc, 'x', 0.0)):.1f},{float(getattr(loc, 'y', 0.0)):.1f}) "
+                        f"speed={speed_str} m/s "
+                        f"wp={player.waypoint_index} dist_to_wp={dist_wp:.1f}m"
+                    )
+            except Exception as e:
+                print(f"[debug] tick debug error: {e!r}")
         if rs.phase.name == "FINISHED":
             break
         time.sleep(0.5)

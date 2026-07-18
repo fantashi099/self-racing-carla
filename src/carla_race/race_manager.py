@@ -24,6 +24,7 @@ DNF cars get ``finish_position = num_cars`` (per the race_state contract).
 from __future__ import annotations
 
 import contextlib
+import sys
 import threading
 import time
 from typing import Any
@@ -222,9 +223,12 @@ def _tm_port(tm: Any) -> int:
 
 def _enable_autopilot(actor: Any, tm_port: int) -> None:
     """Enable TM autopilot on an actor. Defensive: some mock actors lack
-    ``set_autopilot``; skip silently so unit tests stay CARLA-free."""
+    ``set_autopilot``; skip silently so unit tests stay CARLA-free. Logs
+    failures so L2 can see when real CARLA rejects the call."""
     set_autopilot = getattr(actor, "set_autopilot", None)
     if set_autopilot is None:
         return
-    with contextlib.suppress(Exception):
+    try:
         set_autopilot(True, tm_port)
+    except Exception as e:
+        print(f"[race_manager] set_autopilot failed for actor {getattr(actor, 'id', '?')}: {e!r}", file=sys.stderr)
