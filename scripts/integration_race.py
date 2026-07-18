@@ -154,6 +154,15 @@ def main() -> int:
         f"player_id={player.actor_id} cars={len(rs.cars)} "
         f"waypoints={rs.circuit_waypoint_count}"
     )
+    # Debug: what does build_circuit actually return?
+    if rm._circuit:
+        first = rm._circuit[0]
+        print(
+            f"[debug] circuit[0] type={type(first).__name__} "
+            f"has_location={hasattr(first, 'location')} "
+            f"has_road_id={hasattr(first, 'road_id')} "
+            f"has_transform={hasattr(first, 'transform')}"
+        )
 
     # Enable autopilot + circuit path on the player too so it finishes
     # without a human driver. race_manager.start() already enabled autopilot
@@ -171,6 +180,13 @@ def main() -> int:
     player_actor = world.get_actor(player.actor_id)
     carla_map = world.get_map()
     player_waypoints = _circuit_to_waypoints(carla_map, rm._circuit)
+    if player_waypoints:
+        print(
+            f"[debug] player_waypoints[0] type={type(player_waypoints[0]).__name__} "
+            f"count={len(player_waypoints)}"
+        )
+    else:
+        print("[debug] player_waypoints is empty — conversion failed")
     if player_actor is not None and player_waypoints:
         try:
             player_actor.set_autopilot(True, tm_port)

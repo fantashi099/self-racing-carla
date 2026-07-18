@@ -59,11 +59,19 @@ def _apply_preset_key(tm: Any, key: str, actor: Any, value: Any) -> None:
 
 
 def _circuit_to_waypoints(carla_map: Any, circuit: list[Any]) -> list[Any]:
-    """Convert circuit Transforms to Waypoints via ``map.get_waypoint(loc)``.
+    """Convert circuit entries to Waypoints. Handles two circuit shapes:
+    - list[Transform]: convert each via ``map.get_waypoint(tf.location)``.
+    - list[Waypoint]: use directly (``build_circuit`` may return Waypoints
+      when ``getattr(wp, "transform", wp)`` falls back to the waypoint itself
+      on CARLA builds where ``Waypoint.transform`` isn't a property).
     Closes the loop by appending ``waypoints[0]`` so the AI crosses the
-    start line and completes a lap. Returns ``[]`` if the map can't convert."""
+    start line and completes a lap. Returns ``[]`` if conversion fails."""
     waypoints: list[Any] = []
     for tf in circuit:
+        # Waypoint duck-type: has road_id (Transform does not)
+        if hasattr(tf, "road_id"):
+            waypoints.append(tf)
+            continue
         loc = getattr(tf, "location", None)
         if loc is None:
             continue
@@ -105,8 +113,13 @@ def setup_ai_cars(
         for key, value in preset.items():
             _apply_preset_key(tm, key, actor, value)
         if waypoints:
-            with contextlib.suppress(Exception):
+            try:
                 tm.set_path(actor, waypoints)
+            except Exception as e:
+                print(
+                    f"[ai_driver] set_path failed for actor {actor_id}: {e!r}",
+                    file=sys.stderr,
+                )
 
 
 def reset_ai_cars(tm: Any, car_actors: dict[int, Any]) -> None:
