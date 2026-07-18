@@ -2,6 +2,11 @@
 *.md
 docs/
 
+# Env files (secrets / machine-specific) — .env.example is committed as a template
+.env
+.env.*
+!.env.example
+
 # Python
 __pycache__/
 *.py[cod]

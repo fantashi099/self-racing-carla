@@ -25,10 +25,12 @@ from fastapi.responses import JSONResponse, Response, HTMLResponse
 from fastapi.staticfiles import StaticFiles
 from PIL import Image
 import uvicorn
+from dotenv import load_dotenv
 
 import carla
 
 # ── config ───────────────────────────────────────────────
+load_dotenv()
 CARLA_HOST = os.environ.get("CARLA_HOST", "localhost")
 CARLA_PORT = int(os.environ.get("CARLA_PORT", "2000"))
 BRIDGE_HOST = os.environ.get("BRIDGE_HOST", "0.0.0.0")

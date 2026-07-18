@@ -21,6 +21,10 @@ import os
 import sys
 import traceback
 
+from dotenv import load_dotenv
+
+load_dotenv()
+
 
 def _skip(reason: str) -> int:
     print(f"[SKIP] {reason}", file=sys.stderr)

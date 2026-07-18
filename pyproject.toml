@@ -21,6 +21,7 @@ dev = [
     "mypy>=1.8",
     "ruff>=0.3",
     "httpx>=0.27",
+    "python-dotenv>=1.0",
 ]
 client = [
     "pygame>=2.5",
