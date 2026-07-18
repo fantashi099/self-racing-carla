@@ -120,6 +120,11 @@ from carla_race.bridge_ext import init_race_manager, race_router  # noqa: E402
 init_race_manager(client, register_camera=_register_race_camera)
 app.include_router(race_router)
 
+print(
+    "[bridge] RACE_EXCLUDE_MAPS=" + os.environ.get("RACE_EXCLUDE_MAPS", "<unset>"),
+    flush=True,
+)
+
 
 # ── REST endpoints ────────────────────────────────────────
 @app.get("/")
