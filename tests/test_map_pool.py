@@ -1,9 +1,9 @@
 """Unit tests for carla_race.map_pool (F1).
 
 Uses lightweight fakes that satisfy the structural surface used by
-map_pool: ``client.get_available_maps() -> [obj with .name]``,
-``client.load_world(name) -> world``, ``world.get_map() -> obj with .name``.
-No ``carla`` pip package required.
+map_pool: ``client.get_available_maps() -> list[str]`` (CARLA map names like
+``/Game/Carla/Maps/Town01``), ``client.load_world(name) -> world``,
+``world.get_map() -> obj with .name``. No ``carla`` pip package required.
 """
 from __future__ import annotations
 
@@ -35,11 +35,11 @@ class FakeWorld:
 
 class FakeClient:
     def __init__(self, names: list[str]) -> None:
-        self._maps: list[FakeMap] = [FakeMap(n) for n in names]
+        self._names: list[str] = list(names)
         self.loaded: list[str] = []
 
-    def get_available_maps(self) -> list[FakeMap]:
-        return list(self._maps)
+    def get_available_maps(self) -> list[str]:
+        return list(self._names)
 
     def load_world(self, name: str) -> FakeWorld:
         self.loaded.append(name)

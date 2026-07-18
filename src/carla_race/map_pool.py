@@ -50,7 +50,7 @@ def random_map(
     Combines the explicit ``exclude`` list with ``RACE_EXCLUDE_MAPS`` env.
     Raises ``RuntimeError`` if the pool is empty after filtering.
     """
-    available = [_basename(m.name) for m in client.get_available_maps()]
+    available = [_basename(m) for m in client.get_available_maps()]
     excluded = set(exclude) | set(_exclude_from_env())
     pool = [m for m in available if m not in excluded]
     if not pool:
@@ -58,8 +58,9 @@ def random_map(
             f"no maps available after excluding {sorted(excluded)}; "
             f"available={sorted(available)}"
         )
-    r = rng if rng is not None else random
-    return r.choice(pool)
+    if rng is not None:
+        return rng.choice(pool)
+    return random.choice(pool)
 
 
 def load_map(client: carla.Client, name: str) -> carla.Map:
