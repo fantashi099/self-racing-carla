@@ -40,7 +40,7 @@ const errEl = $('#err'), hudSpd = $('#spd'), hudFps = $('#fps'), hudCtl = $('#ct
 // Resolve bridge base: same origin + path prefix by default, override via ?host=
 const params = new URLSearchParams(location.search);
 // Strip trailing '/drive' (or whatever the serving route is) from pathname to get proxy prefix
-const prefix = params.get('host') || (location.origin + location.pathname.replace(/\/drive\/?$/, ''));
+const prefix = params.get('host') || (location.origin + location.pathname.replace(/\/(drive|manual)\/?$/, ''));
 const API = prefix.replace(/^wss?:/, 'http:').replace(/\/$/, '');
 const WS  = prefix.replace(/^https?:/, 'wss:').replace(/^http:/, 'ws:').replace(/\/$/, '');
 

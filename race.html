@@ -57,7 +57,7 @@
 const $ = s => document.querySelector(s);
 const canvas = $('#c'), ctx = canvas.getContext('2d');
 const params = new URLSearchParams(location.search);
-const prefix = params.get('host') || (location.origin + location.pathname.replace(/\/race\/?$/, ''));
+const prefix = params.get('host') || (location.origin + location.pathname.replace(/\/(race|drive)\/?$/, ''));
 const API = prefix.replace(/^wss?:/, 'http:').replace(/\/$/, '');
 const WS  = prefix.replace(/^https?:/, 'wss:').replace(/^http:/, 'ws:').replace(/\/$/, '');
 

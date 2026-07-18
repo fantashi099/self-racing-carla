@@ -79,6 +79,11 @@ _RACE_HTML = Path(__file__).with_name("race.html")
 
 @app.get("/drive", response_class=HTMLResponse)
 def drive_page():
+    return HTMLResponse(_RACE_HTML.read_text(), media_type="text/html")
+
+
+@app.get("/manual", response_class=HTMLResponse)
+def manual_page():
     return HTMLResponse(_DRIVE_HTML.read_text(), media_type="text/html")
 
 
