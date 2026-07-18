@@ -58,35 +58,32 @@ def _apply_preset_key(tm: Any, key: str, actor: Any, value: Any) -> None:
         method(actor, value)
 
 
-def _circuit_to_waypoints(carla_map: Any, circuit: list[Any]) -> list[Any]:
-    """Convert circuit entries to Waypoints. Handles two circuit shapes:
-    - list[Transform]: convert each via ``map.get_waypoint(tf.location)``.
-    - list[Waypoint]: use directly (``build_circuit`` may return Waypoints
-      when ``getattr(wp, "transform", wp)`` falls back to the waypoint itself
-      on CARLA builds where ``Waypoint.transform`` isn't a property).
-    Closes the loop by appending ``waypoints[0]`` so the AI crosses the
-    start line and completes a lap. Returns ``[]`` if conversion fails."""
-    waypoints: list[Any] = []
+def _circuit_to_path(circuit: list[Any]) -> list[Any]:
+    """Build a TM path (list of Locations) from the circuit. Handles two
+    circuit shapes:
+    - list[Transform]: extract ``tf.location`` (a ``carla.Location``).
+    - list[Waypoint]: extract ``wp.transform.location`` (fallback) or
+      ``wp.location`` if present.
+    Closes the loop by appending the first location so the AI crosses the
+    start line and completes a lap. Returns ``[]`` if no locations extracted.
+
+    Verified at L2 against CARLA 0.9.15: ``TrafficManager.set_path`` takes a
+    list of ``carla.Location`` (NOT Waypoints) — passing Waypoints raises
+    ``TypeError: No registered converter ... Location from ... Waypoint``.
+    """
+    locations: list[Any] = []
     for tf in circuit:
-        # Waypoint duck-type: has road_id (Transform does not)
-        if hasattr(tf, "road_id"):
-            waypoints.append(tf)
-            continue
         loc = getattr(tf, "location", None)
         if loc is None:
-            continue
-        get_wp = getattr(carla_map, "get_waypoint", None)
-        if get_wp is None:
-            return []
-        try:
-            wp = get_wp(loc)
-        except Exception:
-            return []
-        if wp is not None:
-            waypoints.append(wp)
-    if waypoints:
-        waypoints.append(waypoints[0])  # close the loop
-    return waypoints
+            # Waypoint fallback: try .transform.location
+            transform = getattr(tf, "transform", None)
+            if transform is not None:
+                loc = getattr(transform, "location", None)
+        if loc is not None:
+            locations.append(loc)
+    if locations:
+        locations.append(locations[0])  # close the loop
+    return locations
 
 
 def setup_ai_cars(
@@ -106,15 +103,15 @@ def setup_ai_cars(
     preset = AI_DIFFICULTY_PRESETS[difficulty]
     with contextlib.suppress(Exception):
         tm.set_hybrid_physics_mode(True)
-    waypoints = _circuit_to_waypoints(carla_map, circuit)
+    path = _circuit_to_path(circuit)
     for actor_id, actor in car_actors.items():
         if actor_id == player_actor_id:
             continue
         for key, value in preset.items():
             _apply_preset_key(tm, key, actor, value)
-        if waypoints:
+        if path:
             try:
-                tm.set_path(actor, waypoints)
+                tm.set_path(actor, path)
             except Exception as e:
                 print(
                     f"[ai_driver] set_path failed for actor {actor_id}: {e!r}",

@@ -150,14 +150,13 @@ def test_setup_ai_cars_hard_preset_values() -> None:
     assert tm.method_calls["set_global_distance_to_leading_vehicle"][0][1] == 2.0
 
 
-def test_setup_ai_cars_set_path_converts_circuit_to_waypoints_and_closes_loop() -> None:
+def test_setup_ai_cars_set_path_converts_circuit_to_locations_and_closes_loop() -> None:
     tm = FakeTM()
-    fake_map = FakeMap()
     circuit = _circuit(4)
     setup_ai_cars(
         tm,
         {1: FakeActor(1)},
-        fake_map,
+        FakeMap(),
         circuit,
         difficulty="normal",
         player_actor_id=999,
@@ -166,9 +165,10 @@ def test_setup_ai_cars_set_path_converts_circuit_to_waypoints_and_closes_loop() 
     assert len(set_path_calls) == 1
     actor, path = set_path_calls[0]
     assert actor.id == 1
-    # 4 waypoints + 1 closure = 5
+    # 4 locations + 1 closure = 5
     assert len(path) == 5
-    assert [wp.idx for wp in path] == [0, 1, 2, 3, 0]
+    # locations extracted from FakeTransform.location (FakeLoc with .idx)
+    assert [loc.idx for loc in path] == [0, 1, 2, 3, 0]
 
 
 def test_setup_ai_cars_set_path_uses_actor_object_not_id() -> None:
@@ -228,21 +228,17 @@ def test_setup_ai_cars_player_only_no_ai_calls() -> None:
     assert tm.hybrid_physics_mode == [True]
 
 
-def test_setup_ai_cars_skips_set_path_when_map_has_no_get_waypoint() -> None:
+def test_setup_ai_cars_skips_set_path_when_circuit_empty() -> None:
     tm = FakeTM()
-
-    class NoWaypointMap:
-        pass
-
     setup_ai_cars(
         tm,
         {1: FakeActor(1)},
-        NoWaypointMap(),
-        _circuit(),
+        FakeMap(),
+        [],
         difficulty="normal",
         player_actor_id=999,
     )
-    # set_path skipped because waypoints is empty
+    # no circuit → no path → set_path skipped
     assert "set_path" not in tm.method_calls
     # but preset keys still applied
     assert "set_desired_speed" in tm.method_calls

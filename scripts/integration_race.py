@@ -154,22 +154,13 @@ def main() -> int:
         f"player_id={player.actor_id} cars={len(rs.cars)} "
         f"waypoints={rs.circuit_waypoint_count}"
     )
-    # Debug: what does build_circuit actually return?
-    if rm._circuit:
-        first = rm._circuit[0]
-        print(
-            f"[debug] circuit[0] type={type(first).__name__} "
-            f"has_location={hasattr(first, 'location')} "
-            f"has_road_id={hasattr(first, 'road_id')} "
-            f"has_transform={hasattr(first, 'transform')}"
-        )
 
     # Enable autopilot + circuit path on the player too so it finishes
     # without a human driver. race_manager.start() already enabled autopilot
-    # on the AI car; the player is normally human-driven. set_path needs an
-    # Actor object + Waypoints (not int id + Transforms), so we convert the
-    # circuit via the loaded map's get_waypoint — same path as ai_driver.
-    from carla_race.ai_driver import _circuit_to_waypoints
+    # on the AI car; the player is normally human-driven. set_path takes an
+    # Actor + list of Locations (verified at L2 — Waypoints raise a
+    # converter TypeError; Locations work).
+    from carla_race.ai_driver import _circuit_to_path
 
     world = client.get_world()
     tm = client.get_trafficmanager(8000)
@@ -178,19 +169,13 @@ def main() -> int:
     except Exception:
         tm_port = 8000
     player_actor = world.get_actor(player.actor_id)
-    carla_map = world.get_map()
-    player_waypoints = _circuit_to_waypoints(carla_map, rm._circuit)
-    if player_waypoints:
-        print(
-            f"[debug] player_waypoints[0] type={type(player_waypoints[0]).__name__} "
-            f"count={len(player_waypoints)}"
-        )
-    else:
-        print("[debug] player_waypoints is empty — conversion failed")
-    if player_actor is not None and player_waypoints:
+    player_path = _circuit_to_path(rm._circuit)
+    if player_path:
+        print(f"[debug] player_path locations={len(player_path)} type={type(player_path[0]).__name__}")
+    if player_actor is not None and player_path:
         try:
             player_actor.set_autopilot(True, tm_port)
-            tm.set_path(player_actor, player_waypoints)
+            tm.set_path(player_actor, player_path)
             print(f"[OK] player {player.actor_id} autopilot + path enabled")
         except Exception as e:
             print(f"[WARN] could not enable player autopilot: {e!r}", file=sys.stderr)
