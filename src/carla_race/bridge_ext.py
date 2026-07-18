@@ -165,7 +165,12 @@ def start_race() -> dict[str, Any]:
 
 @race_router.get("/state")
 def get_race_state() -> dict[str, Any]:
-    return _get_rm().state_snapshot()
+    rm = _get_rm()
+    try:
+        rm.tick()
+    except Exception as exc:
+        print(f"[race] tick failed: {exc!r}", file=sys.stderr, flush=True)
+    return rm.state_snapshot()
 
 
 @race_router.post("/restart")
