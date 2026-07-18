@@ -58,14 +58,33 @@ def spawn_walkers(world: Any, *, num_walkers: int) -> list[WalkerSpawn]:
     controller_bp = bp_lib.find(CONTROLLER_BP)
 
     spawns: list[WalkerSpawn] = []
-    for _ in range(num_walkers):
+    spawned = 0
+    attempts = 0
+    max_attempts = num_walkers * 5
+    while spawned < num_walkers and attempts < max_attempts:
+        attempts += 1
         start_loc = world.get_random_location_from_navigation()
         start_tf = _make_transform(start_loc)
-        walker = world.spawn_actor(walker_bp, start_tf)
-        controller = world.spawn_actor(controller_bp, start_tf, attach_to=walker)
+        try:
+            walker = world.spawn_actor(walker_bp, start_tf)
+        except RuntimeError as exc:
+            print(f"[traffic] walker spawn retry {attempts}: {exc}", flush=True)
+            continue
+        try:
+            controller = world.spawn_actor(controller_bp, start_tf, attach_to=walker)
+        except RuntimeError as exc:
+            print(f"[traffic] controller spawn failed: {exc}; destroying walker", flush=True)
+            walker.destroy()
+            continue
         controller.start()
         controller.go_to_location(world.get_random_location_from_navigation())
         spawns.append(WalkerSpawn(walker_id=walker.id, controller_id=controller.id))
+        spawned += 1
+    if spawned < num_walkers:
+        print(
+            f"[traffic] spawned {spawned}/{num_walkers} walkers after {attempts} attempts",
+            flush=True,
+        )
     return spawns
 
 
