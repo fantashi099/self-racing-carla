@@ -6,7 +6,7 @@ explicit ``exclude`` list. CARLA map names look like
 ``/Game/Carla/Maps/Town01``; we filter on the basename (``Town01``) so callers
 can pass short names.
 
-Contract (see PROGRESS.md § Module contracts):
+Contract:
 - ``random_map(client, exclude=(), *, rng=None) -> str``
 - ``load_map(client, name) -> carla.Map``
 - ``pick_and_load(client, exclude=(), *, rng=None) -> tuple[str, carla.Map]``

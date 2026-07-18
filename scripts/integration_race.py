@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """L2 integration smoke for F1 (map_pool) against a live CARLA server.
 
-Contract (PROGRESS.md § Module contracts / L2):
+Contract:
 - Read CARLA_HOST / CARLA_PORT from env (default localhost:2000).
 - Auto-skip with exit 0 if CARLA unreachable or the `carla` package is missing.
 - Otherwise: call ``carla_race.map_pool.pick_and_load`` and assert a non-empty
