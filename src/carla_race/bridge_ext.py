@@ -19,6 +19,8 @@ Contract:
 """
 from __future__ import annotations
 
+import sys
+import traceback
 from typing import Any
 
 from fastapi import APIRouter, HTTPException
@@ -140,8 +142,9 @@ def start_race() -> dict[str, Any]:
         rs = rm.start()
     except RuntimeError as exc:
         msg = str(exc)
+        traceback.print_exc(file=sys.stderr)
         if "already running" not in msg:
-            raise HTTPException(status_code=409, detail=msg) from exc
+            raise HTTPException(status_code=500, detail=f"start failed: {msg}") from exc
         current = getattr(rm, "current_state", None)
         existing = current() if callable(current) else None
         if existing is None:
