@@ -42,7 +42,7 @@ def main() -> int:
 
     try:
         client = carla.Client(host, port)
-        client.set_timeout(10.0)
+        client.set_timeout(60.0)
         # Touch the server — cheapest reachability probe.
         client.get_server_version()
     except Exception as exc:
