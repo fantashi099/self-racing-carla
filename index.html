@@ -1,0 +1,164 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,user-scalable=no">
+<title>CARLA Drive</title>
+<style>
+  html,body{margin:0;padding:0;background:#111;color:#eee;font:14px/1.4 system-ui,sans-serif;overflow:hidden;height:100%}
+  #wrap{position:relative;width:100vw;height:100vh;display:flex;align-items:center;justify-content:center}
+  canvas{max-width:100%;max-height:100%;background:#000;display:block}
+  #hud{position:absolute;top:8px;left:8px;background:rgba(0,0,0,.55);padding:6px 10px;border-radius:6px;font-variant-numeric:tabular-nums}
+  #hud b{color:#7ec}
+  #bar{position:absolute;bottom:0;left:0;right:0;display:flex;justify-content:center;gap:10px;padding:8px;background:rgba(0,0,0,.4)}
+  #bar button{flex:0 0 auto;padding:10px 14px;border:0;border-radius:6px;background:#333;color:#eee;font:600 14px system-ui;touch-action:none}
+  #bar button:active{background:#555}
+  .go{background:#2a6!important;color:#fff}
+  .brk{background:#c33!important;color:#fff}
+  #help{position:absolute;top:8px;right:8px;background:rgba(0,0,0,.55);padding:6px 10px;border-radius:6px;font-size:12px}
+  #err{position:absolute;inset:0;display:none;align-items:center;justify-content:center;background:rgba(0,0,0,.8);text-align:center;padding:20px}
+</style>
+</head>
+<body>
+<div id="wrap">
+  <canvas id="c" width="640" height="360"></canvas>
+  <div id="hud">speed <b id="spd">0.0</b> km/h · fps <b id="fps">0</b> · ctrl <b id="ctl">--</b></div>
+  <div id="help">WASD/Arrows · Space brake · R reverse · Enter spawn</div>
+  <div id="bar">
+    <button data-k="up" class="go">▲ Throttle</button>
+    <button data-k="left">◀ Steer L</button>
+    <button data-k="right">Steer R ▶</button>
+    <button data-k="down" class="brk">▼ Brake</button>
+  </div>
+  <div id="err"></div>
+</div>
+<script>
+const $ = s => document.querySelector(s);
+const canvas = $('#c'), ctx = canvas.getContext('2d');
+const errEl = $('#err'), hudSpd = $('#spd'), hudFps = $('#fps'), hudCtl = $('#ctl');
+
+// Resolve bridge base: same origin + path prefix by default, override via ?host=
+const params = new URLSearchParams(location.search);
+// Strip trailing '/drive' (or whatever the serving route is) from pathname to get proxy prefix
+const prefix = params.get('host') || (location.origin + location.pathname.replace(/\/drive\/?$/, ''));
+const API = prefix.replace(/^wss?:/, 'http:').replace(/\/$/, '');
+const WS  = prefix.replace(/^https?:/, 'wss:').replace(/^http:/, 'ws:').replace(/\/$/, '');
+
+let vid = null, sensorId = null, ws = null;
+const ctrl = {throttle:0, steer:0, brake:0, reverse:false, hand_brake:false};
+const keys = new Set();
+let lastFrame = performance.now(), fps = 0, fpsCnt = 0, fpsT = performance.now();
+
+function showErr(msg){ errEl.style.display='flex'; errEl.textContent = msg; }
+function hideErr(){ errEl.style.display='none'; }
+
+async function spawn(){
+  // always spawn fresh — bridge's vehicles dict only tracks what it spawned
+  const sv = await fetch(`${API}/spawn/vehicle`,{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({})}).then(r=>r.json()).catch(e=>null);
+  if (!sv || !sv.id){ showErr('cannot spawn vehicle at '+API); return; }
+  vid = sv.id;
+  // find or create camera attached to vid
+  const sc = await fetch(`${API}/spawn/camera`,{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({attach_to:vid,width:640,height:360,fov:90,x:1.5,z:2.5})}).then(r=>r.json());
+  sensorId = sc.sensor_id;
+  openStream();
+  startLoop();
+  hideErr();
+}
+
+function openStream(){
+  if (ws) ws.close();
+  ws = new WebSocket(`${WS}/stream/${sensorId}`);
+  ws.binaryType = 'arraybuffer';
+  ws.onmessage = ev => {
+    const blob = new Blob([ev.data], {type:'image/jpeg'});
+    const url = URL.createObjectURL(blob);
+    const img = new Image();
+    img.onload = () => { ctx.drawImage(img,0,0,canvas.width,canvas.height); URL.revokeObjectURL(url); fpsTick(); };
+    img.src = url;
+  };
+  ws.onclose = () => { /* fall back to /step polling handled by loop */ };
+}
+
+function fpsTick(){
+  fpsCnt++;
+  const now = performance.now();
+  if (now - fpsT >= 1000){ fps = fpsCnt; fpsCnt = 0; fpsT = now; hudFps.textContent = fps; }
+}
+
+// keyboard
+addEventListener('keydown', e => {
+  const k = e.key.toLowerCase();
+  keys.add(k);
+  console.log('keydown', k, 'keys', [...keys]);
+  if (k === 'enter' && !vid) spawn();
+  if (k === 'r') ctrl.reverse = !ctrl.reverse;
+  e.preventDefault();
+});
+addEventListener('keyup', e => keys.delete(e.key.toLowerCase()));
+
+// touch buttons
+document.querySelectorAll('#bar button').forEach(btn => {
+  const k = btn.dataset.k;
+  const press = e => { keys.add(k); e.preventDefault(); };
+  const release = e => { keys.delete(k); e.preventDefault(); };
+  btn.addEventListener('pointerdown', press);
+  btn.addEventListener('pointerup', release);
+  btn.addEventListener('pointerleave', release);
+  btn.addEventListener('pointercancel', release);
+});
+
+function updateCtrl(){
+  let t=0, s=0, b=0;
+  if (keys.has('w') || keys.has('arrowup')    || keys.has('up'))    t = 1;
+  if (keys.has('s') || keys.has('arrowdown')  || keys.has('down'))  b = 1;
+  if (keys.has('a') || keys.has('arrowleft')  || keys.has('left'))  s = -1;
+  if (keys.has('d') || keys.has('arrowright') || keys.has('right')) s =  1;
+  if (keys.has(' ')) b = 1;
+  // smooth steering toward target
+  ctrl.throttle = t;
+  ctrl.steer    = s;
+  ctrl.brake    = b;
+  ctrl.hand_brake = keys.has('h');
+  hudCtl.textContent = `t${t} s${s} b${b}`;
+}
+
+async function stepLoop(){
+  if (!vid) return;
+  updateCtrl();
+  try {
+    const r = await fetch(`${API}/step/${vid}`, {
+      method:'POST', headers:{'content-type':'application/json'},
+      body: JSON.stringify(ctrl)
+    });
+    if (r.status === 404){
+      console.warn('vehicle lost, re-spawning');
+      vid = null;
+      spawn();
+      return;
+    }
+    if (r.ok){
+      const spd = r.headers.get('X-Speed-Kmh');
+      if (spd) hudSpd.textContent = spd;
+      const buf = await r.arrayBuffer();
+      const blob = new Blob([buf], {type:'image/jpeg'});
+      const url = URL.createObjectURL(blob);
+      const img = new Image();
+      img.onload = () => { ctx.drawImage(img,0,0,canvas.width,canvas.height); URL.revokeObjectURL(url); fpsTick(); };
+      img.src = url;
+    } else {
+      console.warn('step', r.status, await r.text());
+    }
+  } catch(e){ console.warn('step err', e); }
+}
+
+let loopHandle = null;
+function startLoop(){
+  if (loopHandle) return;
+  // ~20Hz control loop; WS frames paint independently
+  loopHandle = setInterval(stepLoop, 50);
+}
+
+spawn();
+</script>
+</body>
+</html>

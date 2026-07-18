@@ -1,0 +1,28 @@
+# Planning / decision docs (kept local, not pushed)
+*.md
+docs/
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+build/
+dist/
+
+# Virtual envs
+.venv/
+venv/
+env/
+
+# Tool caches
+.mypy_cache/
+.pytest_cache/
+.ruff_cache/
+.ruff/
+
+# Editor / OS
+.vscode/
+.idea/
+.DS_Store
+*.swp
