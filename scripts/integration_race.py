@@ -12,7 +12,7 @@ Contract:
   + lap detection + collision sensors + AI autopilot + state snapshot).
   Player car gets autopilot + circuit path so it finishes without a human
   driver. Asserts phase=FINISHED, both cars have finish_position in [1, 2],
-  state_snapshot shape. Timeout 120s.
+  state_snapshot shape. Timeout 600s (TM drives at road speed limits).
 
 Run:
     CARLA_HOST=localhost CARLA_PORT=2000 python scripts/integration_race.py
@@ -190,10 +190,13 @@ def main() -> int:
             f"start=({xs[0]:.1f},{ys[0]:.1f})"
         )
 
-    # Tick until FINISHED or 120s timeout, with rich debug every ~2s.
-    deadline = time.monotonic() + 120.0
+    # Tick until FINISHED or 600s timeout. The TM drives cars at the road's
+    # speed limit (often ~20 km/h on residential roads), so a full 1-lap
+    # loop can take ~400-500s. 600s gives headroom for junction stalls.
+    deadline = time.monotonic() + 600.0
     last_phase = None
     last_debug = 0.0
+    last_pos: tuple[float, float] | None = None
     while time.monotonic() < deadline:
         rs = rm.tick()
         if rs is None:
@@ -206,33 +209,33 @@ def main() -> int:
                 f"finish={player.finish_position}"
             )
         now_mono = time.monotonic()
-        if now_mono - last_debug >= 2.0:
+        if now_mono - last_debug >= 10.0:
             last_debug = now_mono
             try:
                 pa = world.get_actor(player.actor_id)
                 if pa is not None:
                     t = pa.get_transform()
                     loc = getattr(t, "location", None)
-                    vel = None
-                    get_velocity = getattr(pa, "get_velocity", None)
-                    if get_velocity is not None:
-                        try:
-                            v = get_velocity()
-                            vel = (float(getattr(v, "x", 0.0)) ** 2 + float(getattr(v, "y", 0.0)) ** 2) ** 0.5
-                        except Exception:
-                            pass
+                    px = float(getattr(loc, "x", 0.0)) if loc is not None else 0.0
+                    py = float(getattr(loc, "y", 0.0)) if loc is not None else 0.0
+                    # speed from position delta (get_velocity() returned 0.0
+                    # in testing — unreliable on this CARLA build)
+                    speed_str = "NA"
+                    if last_pos is not None:
+                        dx = px - last_pos[0]
+                        dy = py - last_pos[1]
+                        speed_str = f"{(dx*dx + dy*dy)**0.5 / 10.0:.1f}"
+                    last_pos = (px, py)
                     cx = rm._circuit[player.waypoint_index]
                     cx_loc = getattr(cx, "location", None)
                     dist_wp = (
-                        (float(getattr(loc, "x", 0.0)) - float(getattr(cx_loc, "x", 0.0))) ** 2
-                        + (float(getattr(loc, "y", 0.0)) - float(getattr(cx_loc, "y", 0.0))) ** 2
-                    ) ** 0.5 if loc is not None and cx_loc is not None else -1.0
-                    speed_str = f"{vel:.1f}" if vel is not None else "NA"
+                        (px - float(getattr(cx_loc, "x", 0.0))) ** 2
+                        + (py - float(getattr(cx_loc, "y", 0.0))) ** 2
+                    ) ** 0.5 if cx_loc is not None else -1.0
                     print(
-                        f"[debug] t={now_mono - (deadline - 120.0):.1f}s "
-                        f"pos=({float(getattr(loc, 'x', 0.0)):.1f},{float(getattr(loc, 'y', 0.0)):.1f}) "
-                        f"speed={speed_str} m/s "
-                        f"wp={player.waypoint_index} dist_to_wp={dist_wp:.1f}m"
+                        f"[debug] t={now_mono - (deadline - 600.0):.0f}s "
+                        f"pos=({px:.1f},{py:.1f}) speed~{speed_str} m/s "
+                        f"wp={player.waypoint_index}/64 dist_wp={dist_wp:.1f}m"
                     )
             except Exception as e:
                 print(f"[debug] tick debug error: {e!r}")
@@ -242,7 +245,7 @@ def main() -> int:
 
     if rs is None or rs.phase.name != "FINISHED":
         print(
-            f"[FAIL] race did not finish within 120s "
+            f"[FAIL] race did not finish within 600s "
             f"(phase={rs.phase.value if rs else None})",
             file=sys.stderr,
         )
