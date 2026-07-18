@@ -28,6 +28,9 @@ __all__ = ["DEFAULT_NUM_WAYPOINTS", "build_circuit", "start_line_transform"]
 
 DEFAULT_NUM_WAYPOINTS = 64
 _CYCLE_SEARCH_BUDGET = 5000
+_WALK_STEP_DISTANCE = 10.0  # meters between sampled waypoints when walking
+_WALK_MAX_TOTAL = 4000.0    # max meters to walk before giving up on a loop
+_WALK_MIN_LOOP_POINTS = 10  # minimum walked points to consider it a valid loop
 
 
 def _adjacency(topology: list[tuple[Any, Any]]) -> tuple[dict[int, list[int]], dict[int, Any]]:
@@ -112,6 +115,50 @@ def _resample(transforms: list[Any], num_waypoints: int) -> list[Any]:
     return out
 
 
+def _walk_loop(map_obj: Any, *, step_distance: float = _WALK_STEP_DISTANCE,
+               max_total: float = _WALK_MAX_TOTAL) -> list[Any]:
+    """Walk the road network from the first spawn point via
+    ``waypoint.next(distance)`` and collect Transforms until we return near
+    the start (closed loop) or hit ``max_total`` meters. Returns the walked
+    Transforms (without resampling). Returns ``[]`` if the map can't walk."""
+    spawn_pts = map_obj.get_spawn_points()
+    if not spawn_pts:
+        return []
+    start_tf = spawn_pts[0]
+    start_loc = getattr(start_tf, "location", None)
+    if start_loc is None:
+        return []
+    get_wp = getattr(map_obj, "get_waypoint", None)
+    if get_wp is None:
+        return []
+    try:
+        current = get_wp(start_loc)
+    except Exception:
+        return []
+    if current is None:
+        return []
+    start_x = float(getattr(start_loc, "x", 0.0))
+    start_y = float(getattr(start_loc, "y", 0.0))
+    transforms: list[Any] = []
+    total = 0.0
+    while total < max_total:
+        tf = getattr(current, "transform", None)
+        if tf is not None:
+            transforms.append(tf)
+        nxt_list = current.next(step_distance) if hasattr(current, "next") else []
+        if not nxt_list:
+            break
+        current = nxt_list[0]  # pick first at junctions
+        total += step_distance
+        loc = getattr(getattr(current, "transform", None), "location", None)
+        if loc is not None and len(transforms) > _WALK_MIN_LOOP_POINTS:
+            dx = float(getattr(loc, "x", 0.0)) - start_x
+            dy = float(getattr(loc, "y", 0.0)) - start_y
+            if (dx * dx + dy * dy) ** 0.5 < step_distance:
+                break  # returned near start — closed loop
+    return transforms
+
+
 def build_circuit(
     map_obj: carla.Map,
     *,
@@ -119,9 +166,15 @@ def build_circuit(
 ) -> list[carla.Transform]:
     """Build an ordered closed loop of ``num_waypoints`` transforms.
 
-    Prefers a cycle from ``map.get_topology()``; falls back to
-    ``map.get_spawn_points()`` if no cycle is found. Raises ``RuntimeError``
-    if both sources are empty.
+    Three strategies, in order:
+    1. Longest cycle from ``map.get_topology()`` (bounded DFS).
+    2. Walk the road network from spawn point 0 via ``waypoint.next()`` —
+       produces a real drivable loop the AI can follow.
+    3. Fall back to ``map.get_spawn_points()`` (scattered, not a real loop —
+       last resort).
+
+    Raises ``RuntimeError`` if all three yield nothing, ``ValueError`` if
+    ``num_waypoints <= 0``.
     """
     if num_waypoints <= 0:
         raise ValueError(f"num_waypoints must be > 0, got {num_waypoints}")
@@ -134,11 +187,15 @@ def build_circuit(
             if transforms:
                 return _resample(transforms, num_waypoints)
 
+    walked = _walk_loop(map_obj)
+    if walked and len(walked) >= _WALK_MIN_LOOP_POINTS:
+        return _resample(walked, num_waypoints)
+
     spawn_pts = map_obj.get_spawn_points()
     if spawn_pts:
         return _resample(list(spawn_pts), num_waypoints)
 
-    raise RuntimeError("map has no topology cycle and no spawn points")
+    raise RuntimeError("map has no topology cycle, no walkable loop, and no spawn points")
 
 
 def start_line_transform(circuit: list[carla.Transform]) -> carla.Transform:

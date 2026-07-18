@@ -101,7 +101,7 @@ def test_build_circuit_falls_back_to_spawn_points_when_no_cycle_found() -> None:
 
 def test_build_circuit_raises_on_empty_map() -> None:
     m = FakeMap(topology=[], spawn_points=[])
-    with pytest.raises(RuntimeError, match="no topology cycle and no spawn points"):
+    with pytest.raises(RuntimeError, match="no topology cycle, no walkable loop, and no spawn points"):
         build_circuit(m)
 
 
@@ -141,3 +141,102 @@ def test_build_circuit_returns_copies_not_same_object_identity() -> None:
     m = FakeMap(topology=topo)
     build_circuit(m, num_waypoints=64)
     assert len(m.get_topology()) == 3  # unchanged
+
+
+# ── walking loop (strategy 2) ────────────────────────────────────────────
+
+class FakeWalkLoc:
+    def __init__(self, x: float, y: float) -> None:
+        self.x = x
+        self.y = y
+        self.z = 0.0
+
+
+class FakeWalkTransform:
+    def __init__(self, x: float, y: float) -> None:
+        self.location = FakeWalkLoc(x, y)
+
+
+class FakeWalkWaypoint:
+    """A node in a circular waypoint chain. ``next(d)`` returns the next node,
+    wrapping after ``n`` steps to form a loop."""
+
+    _chain: list["FakeWalkWaypoint"] = []
+    _idx: int = 0
+
+    def __init__(self, x: float, y: float) -> None:
+        self.transform = FakeWalkTransform(x, y)
+        self._my_idx = FakeWalkWaypoint._idx
+        FakeWalkWaypoint._idx += 1
+
+    @classmethod
+    def reset(cls, n: int, radius: float = 50.0) -> list["FakeWalkWaypoint"]:
+        import math
+        cls._chain = [FakeWalkWaypoint(radius * math.cos(2 * math.pi * i / n),
+                                       radius * math.sin(2 * math.pi * i / n)) for i in range(n)]
+        cls._idx = 0
+        return cls._chain
+
+    def next(self, distance: float) -> list["FakeWalkWaypoint"]:
+        nxt = self._my_idx + 1
+        if nxt >= len(FakeWalkWaypoint._chain):
+            nxt = 0  # wrap → closed loop
+        return [FakeWalkWaypoint._chain[nxt]]
+
+
+class FakeWalkMap:
+    """Map whose get_waypoint returns the first node of a circular chain."""
+
+    def __init__(self, n: int = 20) -> None:
+        self._chain = FakeWalkWaypoint.reset(n)
+        self._spawn = [FakeWalkTransform(self._chain[0].transform.location.x,
+                                         self._chain[0].transform.location.y)]
+
+    def get_topology(self) -> list[tuple[Any, Any]]:
+        return []  # force walking strategy
+
+    def get_spawn_points(self) -> list[FakeWalkTransform]:
+        return list(self._spawn)
+
+    def get_waypoint(self, loc: FakeWalkLoc) -> FakeWalkWaypoint:
+        return self._chain[0]
+
+
+def test_build_circuit_walks_road_network_when_no_topology() -> None:
+    m = FakeWalkMap(n=20)
+    circuit = build_circuit(m, num_waypoints=20)
+    assert len(circuit) == 20
+    assert all(isinstance(t, FakeWalkTransform) for t in circuit)
+
+
+def test_build_circuit_walk_resamples_to_num_waypoints() -> None:
+    m = FakeWalkMap(n=20)
+    circuit = build_circuit(m, num_waypoints=64)
+    assert len(circuit) == 64
+
+
+def test_build_circuit_walk_provides_real_loop() -> None:
+    """Walked circuit should contain locations along the circle (not just the
+    single spawn point repeated)."""
+    m = FakeWalkMap(n=20)
+    circuit = build_circuit(m, num_waypoints=20)
+    xs = [t.location.x for t in circuit]
+    # a real loop has variety in x (not all the same)
+    assert len(set(round(x, 1) for x in xs)) > 1
+
+
+def test_build_circuit_walk_falls_back_to_spawn_when_walk_too_short() -> None:
+
+    class ShortWalkMap(FakeWalkMap):
+        def get_waypoint(self, loc: FakeWalkLoc) -> FakeWalkWaypoint:
+            # return a waypoint whose next() always returns empty → walk fails
+            class DeadEndWaypoint(FakeWalkWaypoint):
+                def next(self, distance: float) -> list[Any]:
+                    return []
+            return DeadEndWaypoint(self._chain[0].transform.location.x,
+                                    self._chain[0].transform.location.y)
+
+    m = ShortWalkMap(n=20)
+    # walk fails immediately (0 points) → falls back to spawn points
+    circuit = build_circuit(m, num_waypoints=5)
+    assert len(circuit) == 5
