@@ -31,26 +31,25 @@ def test_difficulties_match_presets_keys() -> None:
 
 def test_presets_have_consistent_keys() -> None:
     expected = {
-        "percentage_speed_difference",
+        "desired_speed",
         "global_distance_to_leading_vehicle",
-        "auto_lane_change",
-        "safety_mode",
     }
     for name, preset in AI_DIFFICULTY_PRESETS.items():
         assert set(preset.keys()) == expected, f"{name} preset keys mismatch"
 
 
 def test_easy_is_slowest_hard_is_fastest() -> None:
-    easy = AI_DIFFICULTY_PRESETS["easy"]["percentage_speed_difference"]
-    normal = AI_DIFFICULTY_PRESETS["normal"]["percentage_speed_difference"]
-    hard = AI_DIFFICULTY_PRESETS["hard"]["percentage_speed_difference"]
+    easy = AI_DIFFICULTY_PRESETS["easy"]["desired_speed"]
+    normal = AI_DIFFICULTY_PRESETS["normal"]["desired_speed"]
+    hard = AI_DIFFICULTY_PRESETS["hard"]["desired_speed"]
+    assert easy < normal < hard
+
+
+def test_hard_has_smallest_following_gap() -> None:
+    easy = AI_DIFFICULTY_PRESETS["easy"]["global_distance_to_leading_vehicle"]
+    normal = AI_DIFFICULTY_PRESETS["normal"]["global_distance_to_leading_vehicle"]
+    hard = AI_DIFFICULTY_PRESETS["hard"]["global_distance_to_leading_vehicle"]
     assert easy > normal > hard
-
-
-def test_hard_disables_safety_easy_enables() -> None:
-    assert AI_DIFFICULTY_PRESETS["hard"]["safety_mode"] is False
-    assert AI_DIFFICULTY_PRESETS["easy"]["safety_mode"] is True
-    assert AI_DIFFICULTY_PRESETS["normal"]["safety_mode"] is True
 
 
 def test_race_config_is_frozen() -> None:

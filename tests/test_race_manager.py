@@ -109,6 +109,11 @@ class FakeBPLibrary:
         return []
 
 
+class FakeWaypoint:
+    def __init__(self, idx: int) -> None:
+        self.idx = idx
+
+
 class FakeMap:
     def __init__(self, name: str, spawn_points: list[Tf]) -> None:
         self.name = name
@@ -119,6 +124,10 @@ class FakeMap:
 
     def get_spawn_points(self) -> list[Tf]:
         return list(self._spawn)
+
+    def get_waypoint(self, loc: Loc) -> FakeWaypoint:
+        # return a waypoint derived from the location; idx is the location's tag
+        return FakeWaypoint(int(loc.x) if hasattr(loc, "x") else 0)
 
 
 class FakeWorld:

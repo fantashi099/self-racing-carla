@@ -89,10 +89,10 @@ class RaceManager:
         player_spawn = next((s for s in self._spawns if s.is_player), None)
         player_id = player_spawn.actor_id if player_spawn is not None else -1
         tm = self._get_traffic_manager()
-        car_actor_ids = [s.actor_id for s in self._spawns]
         setup_ai_cars(
             tm,
-            car_actor_ids,
+            self._car_actors,
+            carla_map,
             self._circuit,
             difficulty=self._config.ai_difficulty,
             player_actor_id=player_id,

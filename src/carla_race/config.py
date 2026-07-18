@@ -33,31 +33,27 @@ DEFAULT_AI_DIFFICULTY = "normal"
 
 DIFFICULTIES: tuple[str, ...] = ("easy", "normal", "hard")
 
-# TrafficManager parameters per difficulty. Keys mirror the CARLA
-# TrafficManager API consumed by ai_driver.setup_ai_cars (F4):
-# - percentage_speed_difference: signed delta vs speed limit (+ = slower,
-#   - = faster). 0 = drive the limit.
-# - global_distance_to_leading_vehicle: meters of following gap.
-# - auto_lane_change: allow TM to change lanes to overtake.
-# - safety_mode: True = collision-avoidance on; False = aggressive (hard).
+# TrafficManager parameters per difficulty. Keys mirror the real CARLA
+# TrafficManager API (verified against CARLA 0.9.15 build at L2):
+# - desired_speed: target speed in km/h (assumed; verify at L3). easy=20,
+#   normal=40, hard=60.
+# - global_distance_to_leading_vehicle: following gap in meters.
+# Note: this CARLA build's TM has no set_percentage_speed_difference,
+# set_auto_lane_change, or set_safety_mode — those were dropped. ai_driver
+# applies preset keys defensively (skips any method missing on the runtime
+# TM), so adding keys for other CARLA versions is safe.
 AI_DIFFICULTY_PRESETS: dict[str, dict[str, Any]] = {
     "easy": {
-        "percentage_speed_difference": 20.0,
+        "desired_speed": 20.0,
         "global_distance_to_leading_vehicle": 5.0,
-        "auto_lane_change": False,
-        "safety_mode": True,
     },
     "normal": {
-        "percentage_speed_difference": 0.0,
+        "desired_speed": 40.0,
         "global_distance_to_leading_vehicle": 3.0,
-        "auto_lane_change": True,
-        "safety_mode": True,
     },
     "hard": {
-        "percentage_speed_difference": -20.0,
+        "desired_speed": 60.0,
         "global_distance_to_leading_vehicle": 2.0,
-        "auto_lane_change": True,
-        "safety_mode": False,
     },
 }
 

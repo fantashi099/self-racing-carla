@@ -157,7 +157,11 @@ def main() -> int:
 
     # Enable autopilot + circuit path on the player too so it finishes
     # without a human driver. race_manager.start() already enabled autopilot
-    # on the AI car; the player is normally human-driven.
+    # on the AI car; the player is normally human-driven. set_path needs an
+    # Actor object + Waypoints (not int id + Transforms), so we convert the
+    # circuit via the loaded map's get_waypoint — same path as ai_driver.
+    from carla_race.ai_driver import _circuit_to_waypoints
+
     world = client.get_world()
     tm = client.get_trafficmanager(8000)
     try:
@@ -165,11 +169,13 @@ def main() -> int:
     except Exception:
         tm_port = 8000
     player_actor = world.get_actor(player.actor_id)
-    if player_actor is not None:
+    carla_map = world.get_map()
+    player_waypoints = _circuit_to_waypoints(carla_map, rm._circuit)
+    if player_actor is not None and player_waypoints:
         try:
             player_actor.set_autopilot(True, tm_port)
-            tm.set_path(player.actor_id, rm._circuit)
-            print(f"[OK] player {player.actor_id} autopilot enabled")
+            tm.set_path(player_actor, player_waypoints)
+            print(f"[OK] player {player.actor_id} autopilot + path enabled")
         except Exception as e:
             print(f"[WARN] could not enable player autopilot: {e!r}", file=sys.stderr)
 
