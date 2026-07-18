@@ -24,6 +24,7 @@ DNF cars get ``finish_position = num_cars`` (per the race_state contract).
 from __future__ import annotations
 
 import contextlib
+import os
 import sys
 import threading
 import time
@@ -41,7 +42,7 @@ from carla_race.vehicle_grid import CarSpawn, destroy_grid, spawn_grid
 
 __all__ = ["RaceManager"]
 
-DEFAULT_TM_PORT = 8000
+DEFAULT_TM_PORT = int(os.environ.get("RACE_TM_PORT", "8001"))
 
 
 class RaceManager:
