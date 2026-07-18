@@ -220,19 +220,31 @@ def step(vid: int, body: dict):
     Race cars (spawned by race_manager, not /spawn/vehicle) resolve via world.get_actor."""
     v = vehicles.get(vid)
     if v is None:
-        w = client.get_world()
-        v = w.get_actor(vid)
+        try:
+            w = client.get_world()
+            v = w.get_actor(vid)
+        except Exception as exc:
+            print(f"[step] CARLA unreachable for vid {vid}: {exc!r}", flush=True)
+            return JSONResponse(
+                {"error": "simulator unreachable", "vid": vid}, status_code=503,
+            )
         if v is None:
             return JSONResponse({"error": f"vehicle {vid} not found"}, status_code=404)
-    ctrl = carla.VehicleControl(
-        throttle=float(body.get("throttle", 0.0)),
-        steer=float(body.get("steer", 0.0)),
-        brake=float(body.get("brake", 0.0)),
-        reverse=bool(body.get("reverse", False)),
-        hand_brake=bool(body.get("hand_brake", False)),
-    )
-    v.apply_control(ctrl)
-    speed_kmh = round(v.get_velocity().length() * 3.6, 1)
+    try:
+        ctrl = carla.VehicleControl(
+            throttle=float(body.get("throttle", 0.0)),
+            steer=float(body.get("steer", 0.0)),
+            brake=float(body.get("brake", 0.0)),
+            reverse=bool(body.get("reverse", False)),
+            hand_brake=bool(body.get("hand_brake", False)),
+        )
+        v.apply_control(ctrl)
+        speed_kmh = round(v.get_velocity().length() * 3.6, 1)
+    except Exception as exc:
+        print(f"[step] control/velocity failed for vid {vid}: {exc!r}", flush=True)
+        return JSONResponse(
+            {"error": "simulator unreachable", "vid": vid}, status_code=503,
+        )
 
     sid = vehicle_to_sensor.get(vid)
     jpeg = sensors.get(sid, {}).get("latest_jpeg") if sid else None
