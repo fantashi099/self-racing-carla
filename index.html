@@ -39,7 +39,10 @@
   <div id="gridbar">
     <button id="spawngrid" title="Spawn race grid (F2)">🏁 Spawn Grid</button>
     <button id="destroygrid" title="Destroy grid (F2)">🗑 Destroy Grid</button>
+    <button id="startai" title="Start AI autopilot on grid cars (F4)">🤖 Start AI</button>
+    <button id="stopai" title="Stop AI autopilot (F4)">⏹ Stop AI</button>
     <span>grid: <b id="gridcount">0</b></span>
+    <span>AI: <b id="aicount">0</b></span>
   </div>
   <div id="help">WASD/Arrows · Space brake · R reverse · Enter spawn</div>
   <div id="bar">
@@ -287,6 +290,46 @@ function startGridPoll(){
 
 $('#spawngrid').addEventListener('click', spawnGrid);
 $('#destroygrid').addEventListener('click', destroyGrid);
+
+// F4 — TrafficManager autopilot + set_path(circuit) on the grid AI cars.
+async function startAI(){
+  const btn = $('#startai');
+  btn.disabled = true;
+  btn.textContent = '🤖 starting…';
+  try {
+    const r = await fetch(`${API}/race/ai/start`, {
+      method:'POST', headers:{'content-type':'application/json'}, body:'{}'
+    }).then(r=>r.json());
+    if (r && typeof r.ai_cars === 'number'){
+      $('#aicount').textContent = r.ai_cars;
+      console.log(`[ai] started ${r.ai_cars} cars, waypoints=${r.circuit_waypoints}, diff=${r.difficulty}, tm_port=${r.tm_port}`);
+    } else {
+      showErr('start AI failed: ' + JSON.stringify(r));
+    }
+  } catch(e){
+    showErr('start AI error: ' + e);
+  } finally {
+    btn.disabled = false;
+    btn.textContent = '🤖 Start AI';
+  }
+}
+
+async function stopAI(){
+  const btn = $('#stopai');
+  btn.disabled = true;
+  try {
+    const r = await fetch(`${API}/race/ai/stop`, {method:'POST'}).then(r=>r.json());
+    $('#aicount').textContent = 0;
+    console.log('[ai] stopped', r);
+  } catch(e){
+    console.warn('stop AI err', e);
+  } finally {
+    btn.disabled = false;
+  }
+}
+
+$('#startai').addEventListener('click', startAI);
+$('#stopai').addEventListener('click', stopAI);
 
 // On load, fetch any existing grid so a page reload keeps the minimap in sync
 // (the camera is gone, but the grid dots + count still show). User clicks

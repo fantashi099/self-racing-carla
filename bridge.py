@@ -17,7 +17,7 @@ import io
 import os
 import threading
 from pathlib import Path
-from typing import Dict, Set
+from typing import Any, Dict, Set
 
 import numpy as np
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
@@ -52,6 +52,10 @@ _carla_lock = threading.RLock()
 # the /drive minimap polls it for AI car positions.
 _race_grid: list = []  # list[CarSpawn]
 _race_grid_player_id: int | None = None
+# F4 AI state — TrafficManager + circuit built for the current grid.
+_race_tm: Any = None
+_race_circuit: list = []
+_race_ai_enabled: bool = False
 
 
 # ── cross-thread broadcast (CARLA sensor cb runs on its own thread) ──
@@ -90,11 +94,16 @@ async def _shutdown():
     # Stop every sensor listener so the CARLA sensor thread stops firing cb
     # after the asyncio loop is gone (prevents the "Event loop is closed"
     # spam + segfault on Ctrl+C). Best-effort — missing/destroyed sensors
-    # are ignored. Also destroy the F2 grid so CARLA doesn't carry leftover
-    # vehicles across bridge restarts.
-    global _race_grid, _race_grid_player_id
+    # are ignored. Also stop AI + destroy the F2 grid so CARLA doesn't carry
+    # leftover vehicles across bridge restarts.
+    global _race_grid, _race_grid_player_id, _race_ai_enabled
     try:
         with _carla_lock:
+            if _race_grid:
+                try:
+                    _stop_ai_safe(client.get_world())
+                except Exception:
+                    pass
             for s in list(sensors.values()):
                 actor = s.get("actor")
                 try:
@@ -109,6 +118,7 @@ async def _shutdown():
                     pass
                 _race_grid = []
                 _race_grid_player_id = None
+                _race_ai_enabled = False
     except Exception:
         pass
 
@@ -178,6 +188,9 @@ def manual_page():
 from carla_race.map_pool import pick_and_load  # noqa: E402
 from carla_race.vehicle_grid import destroy_grid, spawn_grid  # noqa: E402
 from carla_race.bridge_ext import spawn_player_camera  # noqa: E402
+from carla_race.circuit import build_circuit  # noqa: E402
+from carla_race.ai_driver import reset_ai_cars, setup_ai_cars  # noqa: E402
+from carla_race.config import AI_DIFFICULTY_PRESETS  # noqa: E402
 
 
 @app.get("/map/current")
@@ -227,9 +240,12 @@ def post_random_map():
     with _carla_lock:
         name, _carla_map = pick_and_load(client)
         # load_world destroys all actors — drop the grid bookkeeping too.
-        global _race_grid, _race_grid_player_id
+        global _race_grid, _race_grid_player_id, _race_ai_enabled
+        if _race_grid:
+            _stop_ai_safe(client.get_world())
         _race_grid = []
         _race_grid_player_id = None
+        _race_ai_enabled = False
     return {"map": name}
 
 
@@ -262,6 +278,37 @@ def _clear_vehicles_near_spawn_points(world, num_cars: int, radius: float = 3.0)
     return destroyed
 
 
+def _stop_ai_safe(world: Any) -> None:
+    """Disable autopilot + clear TM paths on the current grid before the
+    grid is destroyed. Best-effort — called from /race/grid (idempotent
+    branch), /race/grid/destroy, /map/random, and shutdown. Holds no lock
+    itself (callers hold _carla_lock)."""
+    global _race_ai_enabled
+    if not _race_grid or _race_tm is None:
+        _race_ai_enabled = False
+        return
+    car_actors: dict[int, Any] = {}
+    for s in _race_grid:
+        actor = world.get_actor(s.actor_id)
+        if actor is not None:
+            car_actors[s.actor_id] = actor
+    try:
+        reset_ai_cars(_race_tm, car_actors)
+    except Exception as e:
+        print(f"[ai] reset_ai_cars failed during grid cleanup: {e!r}", flush=True)
+    for s in _race_grid:
+        if s.is_player:
+            continue
+        actor = car_actors.get(s.actor_id)
+        if actor is None:
+            continue
+        try:
+            actor.set_autopilot(False)
+        except Exception:
+            pass
+    _race_ai_enabled = False
+
+
 @app.post("/race/grid")
 def post_race_grid(body: dict = None):
     """F2: spawn the race grid (1 player + N-1 AI) at distinct spawn points.
@@ -276,18 +323,20 @@ def post_race_grid(body: dict = None):
     if num_cars < 1:
         return JSONResponse({"error": "num_cars must be >= 1"}, status_code=400)
 
-    global _race_grid, _race_grid_player_id
+    global _race_grid, _race_grid_player_id, _race_ai_enabled
     with _carla_lock:
         world = client.get_world()
         # Idempotent: if a grid is already spawned, destroy it first so
         # re-clicking Spawn Grid gives a fresh grid instead of a 409 or a
         # collision with the old grid's actors.
         if _race_grid:
+            _stop_ai_safe(world)
             destroy_grid(world, _race_grid)
             for s in _race_grid:
                 vehicles.pop(s.actor_id, None)
             _race_grid = []
             _race_grid_player_id = None
+            _race_ai_enabled = False
             # CARLA destroy() is async — the actor stays physically present
             # until the sim advances a frame. Force a tick so spawn_grid
             # doesn't collide with the just-destroyed actors.
@@ -357,11 +406,12 @@ def get_race_grid():
 @app.post("/race/grid/destroy")
 def post_race_grid_destroy():
     """F2: destroy the current grid (best-effort, missing actors ignored)."""
-    global _race_grid, _race_grid_player_id
+    global _race_grid, _race_grid_player_id, _race_ai_enabled
     if not _race_grid:
         return {"destroyed": 0}
     with _carla_lock:
         world = client.get_world()
+        _stop_ai_safe(world)
         count = len(_race_grid)
         destroy_grid(world, _race_grid)
         # also drop from the manual vehicles dict if present
@@ -397,6 +447,110 @@ def post_race_camera(vid: int):
             world, actor, register_camera=_register_race_camera,
         )
     return cam_info
+
+
+@app.post("/race/ai/start")
+def post_race_ai_start(body: dict = None):
+    """F4: enable TrafficManager autopilot + set_path(circuit) on every AI
+    car in the current grid. The player car is skipped (human drives).
+
+    Optional body: {difficulty: "easy"|"normal"|"hard"} — defaults to
+    RACE_AI_DIFFICULTY env (default "normal").
+    """
+    global _race_tm, _race_circuit, _race_ai_enabled
+    if not _race_grid:
+        return JSONResponse({"error": "no grid spawned; spawn a grid first"}, status_code=400)
+    body = body or {}
+    difficulty = body.get("difficulty") or os.environ.get("RACE_AI_DIFFICULTY", "normal")
+    if difficulty not in AI_DIFFICULTY_PRESETS:
+        return JSONResponse(
+            {"error": f"unknown difficulty {difficulty!r}; "
+                      f"expected {sorted(AI_DIFFICULTY_PRESETS)}"},
+            status_code=400,
+        )
+    tm_port = int(os.environ.get("RACE_TM_PORT", "8001"))
+    with _carla_lock:
+        world = client.get_world()
+        carla_map = world.get_map()
+        try:
+            _race_circuit = build_circuit(carla_map)
+        except Exception as e:
+            return JSONResponse({"error": f"build_circuit failed: {e}"}, status_code=503)
+        if not _race_circuit:
+            return JSONResponse({"error": "build_circuit returned empty"}, status_code=503)
+        try:
+            _race_tm = client.get_trafficmanager(tm_port)
+        except Exception as e:
+            return JSONResponse(
+                {"error": f"get_trafficmanager({tm_port}) failed: {e}", "port": tm_port},
+                status_code=503,
+            )
+        car_actors: dict[int, Any] = {}
+        for s in _race_grid:
+            actor = world.get_actor(s.actor_id)
+            if actor is not None:
+                car_actors[s.actor_id] = actor
+        try:
+            setup_ai_cars(
+                _race_tm, car_actors, carla_map, _race_circuit,
+                difficulty=difficulty, player_actor_id=_race_grid_player_id or -1,
+            )
+        except ValueError as e:
+            return JSONResponse({"error": str(e)}, status_code=400)
+        # set_path alone doesn't engage autopilot — enable it per AI actor too.
+        # (race_manager does the same in its start() path.)
+        tm_port_actual = _race_tm.get_port() if hasattr(_race_tm, "get_port") else tm_port
+        ai_count = 0
+        for s in _race_grid:
+            if s.is_player:
+                continue
+            actor = car_actors.get(s.actor_id)
+            if actor is None:
+                continue
+            try:
+                actor.set_autopilot(True, tm_port_actual)
+                ai_count += 1
+            except Exception as e:
+                print(f"[ai] set_autopilot failed for {s.actor_id}: {e!r}", flush=True)
+        _race_ai_enabled = True
+    return {
+        "ai_cars": ai_count,
+        "circuit_waypoints": len(_race_circuit),
+        "difficulty": difficulty,
+        "tm_port": tm_port_actual,
+    }
+
+
+@app.post("/race/ai/stop")
+def post_race_ai_stop():
+    """F4: disable autopilot on every AI car + clear their TM paths."""
+    global _race_ai_enabled
+    if not _race_grid or _race_tm is None:
+        _race_ai_enabled = False
+        return {"stopped": 0}
+    with _carla_lock:
+        world = client.get_world()
+        car_actors: dict[int, Any] = {}
+        for s in _race_grid:
+            actor = world.get_actor(s.actor_id)
+            if actor is not None:
+                car_actors[s.actor_id] = actor
+        try:
+            reset_ai_cars(_race_tm, car_actors)
+        except Exception as e:
+            print(f"[ai] reset_ai_cars failed: {e!r}", flush=True)
+        for s in _race_grid:
+            if s.is_player:
+                continue
+            actor = car_actors.get(s.actor_id)
+            if actor is None:
+                continue
+            try:
+                actor.set_autopilot(False)
+            except Exception:
+                pass
+        _race_ai_enabled = False
+    return {"stopped": len(car_actors) - 1}
 
 
 # Race mode endpoints (F9/F10) disabled 2026-07-19: re-enable per-feature only
