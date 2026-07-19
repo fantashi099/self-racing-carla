@@ -463,7 +463,6 @@ def post_race_ai_start(body: dict = None):
     RACE_AI_DIFFICULTY env (default "normal").
     """
     global _race_tm, _race_circuit, _race_ai_enabled, _race_tm_port
-    global _race_tm, _race_circuit, _race_ai_enabled
     if not _race_grid:
         return JSONResponse({"error": "no grid spawned; spawn a grid first"}, status_code=400)
     body = body or {}
