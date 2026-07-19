@@ -100,18 +100,44 @@ _DRIVE_HTML = Path(__file__).with_name("index.html")
 _RACE_HTML = Path(__file__).with_name("race.html")
 
 
+@app.get("/drive", response_class=HTMLResponse)
+def drive_page():
+    return HTMLResponse(_DRIVE_HTML.read_text(), media_type="text/html")
+
+
 @app.get("/manual", response_class=HTMLResponse)
 def manual_page():
     return HTMLResponse(_DRIVE_HTML.read_text(), media_type="text/html")
 
 
+# F1 — random map load. Live-verifiable in /drive via the "Random Map" button.
+# Endpoints here are F1-only; race endpoints (F9/F10) stay disabled until each
+# is live-verified with supervisor sign-off. See PROGRESS.md
+# "Session 2026-07-19 (later) — RESET + supervisor rule".
+from carla_race.map_pool import pick_and_load  # noqa: E402
+
+
+@app.get("/map/current")
+def get_current_map():
+    w = client.get_world()
+    return {"map": w.get_map().name.rsplit("/", 1)[-1]}
+
+
+@app.post("/map/random")
+def post_random_map():
+    """F1: pick a random map (RACE_EXCLUDE_MAPS filter) and load it.
+
+    load_world destroys all current actors, so the client must re-spawn its
+    vehicle + camera after calling this (the /drive page does that on success).
+    """
+    with _carla_lock:
+        name, _carla_map = pick_and_load(client)
+    return {"map": name}
+
+
 # Race mode endpoints (F9/F10) disabled 2026-07-19: re-enable per-feature only
 # after live CARLA verification with supervisor sign-off. See PROGRESS.md
 # "Session 2026-07-19 (later) — RESET + supervisor rule".
-#
-# @app.get("/drive", response_class=HTMLResponse)
-# def drive_page():
-#     return HTMLResponse(_RACE_HTML.read_text(), media_type="text/html")
 #
 # @app.get("/race", response_class=HTMLResponse)
 # def race_page():

@@ -15,7 +15,11 @@
   #bar button:active{background:#555}
   .go{background:#2a6!important;color:#fff}
   .brk{background:#c33!important;color:#fff}
-  #help{position:absolute;top:8px;right:8px;background:rgba(0,0,0,.55);padding:6px 10px;border-radius:6px;font-size:12px}
+  #mapbar{position:absolute;top:8px;right:8px;display:flex;gap:8px;align-items:center;background:rgba(0,0,0,.55);padding:6px 10px;border-radius:6px;font-size:12px}
+  #mapbar button{padding:6px 10px;border:0;border-radius:4px;background:#36c;color:#fff;font:600 12px system-ui;cursor:pointer}
+  #mapbar button:disabled{opacity:.5;cursor:wait}
+  #mapname{color:#7ec;font-weight:600}
+  #help{position:absolute;top:40px;right:8px;background:rgba(0,0,0,.55);padding:6px 10px;border-radius:6px;font-size:12px}
   #err{position:absolute;inset:0;display:none;align-items:center;justify-content:center;background:rgba(0,0,0,.8);text-align:center;padding:20px}
 </style>
 </head>
@@ -23,6 +27,10 @@
 <div id="wrap">
   <canvas id="c" width="640" height="360"></canvas>
   <div id="hud">speed <b id="spd">0.0</b> km/h · fps <b id="fps">0</b> · ctrl <b id="ctl">--</b></div>
+  <div id="mapbar">
+    <span>map: <b id="mapname">--</b></span>
+    <button id="randmap" title="Load a random map (F1)">🔄 Random Map</button>
+  </div>
   <div id="help">WASD/Arrows · Space brake · R reverse · Enter spawn</div>
   <div id="bar">
     <button data-k="up" class="go">▲ Throttle</button>
@@ -64,6 +72,41 @@ async function spawn(){
   startLoop();
   hideErr();
 }
+
+async function loadMapName(){
+  try {
+    const r = await fetch(`${API}/map/current`).then(r=>r.json());
+    if (r && r.map) $('#mapname').textContent = r.map;
+  } catch(e){ /* ignore */ }
+}
+
+async function randomMap(){
+  const btn = $('#randmap');
+  btn.disabled = true;
+  btn.textContent = '🔄 loading…';
+  try {
+    const r = await fetch(`${API}/map/random`,{method:'POST'}).then(r=>r.json());
+    if (r && r.map){
+      $('#mapname').textContent = r.map;
+      // load_world destroys all actors — drop current vehicle + camera, re-spawn
+      vid = null;
+      if (ws) { ws.close(); ws = null; }
+      if (loopHandle) { clearInterval(loopHandle); loopHandle = null; }
+      ctx.clearRect(0,0,canvas.width,canvas.height);
+      await spawn();
+    } else {
+      showErr('random map failed: ' + JSON.stringify(r));
+    }
+  } catch(e){
+    showErr('random map error: ' + e);
+  } finally {
+    btn.disabled = false;
+    btn.textContent = '🔄 Random Map';
+  }
+}
+
+$('#randmap').addEventListener('click', randomMap);
+loadMapName();
 
 function openStream(){
   if (ws) ws.close();
