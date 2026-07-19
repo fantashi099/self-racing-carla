@@ -175,8 +175,8 @@ async function randomMap(){
       // load_world destroys all actors — drop current vehicle + camera, re-spawn
       vid = null;
       if (ws) { ws.close(); ws = null; }
-      if (loopHandle) { clearInterval(loopHandle); loopHandle = null; }
-      if (gridPollHandle) { clearInterval(gridPollHandle); gridPollHandle = null; }
+      stopLoop()
+      stopGridPoll()
       ctx.clearRect(0,0,canvas.width,canvas.height);
       carPos = null;
       gridCars = [];
@@ -212,7 +212,7 @@ async function spawnGrid(){
       vid = null;
     }
     if (ws) { ws.close(); ws = null; }
-    if (loopHandle) { clearInterval(loopHandle); loopHandle = null; }
+    stopLoop()
 
     const r = await fetch(`${API}/race/grid`, {
       method:'POST', headers:{'content-type':'application/json'}, body:'{}'
@@ -245,8 +245,8 @@ async function destroyGrid(){
   const btn = $('#destroygrid');
   btn.disabled = true;
   try {
-    if (loopHandle) { clearInterval(loopHandle); loopHandle = null; }
-    if (gridPollHandle) { clearInterval(gridPollHandle); gridPollHandle = null; }
+    stopLoop()
+    stopGridPoll()
     if (ws) { ws.close(); ws = null; }
     await fetch(`${API}/race/grid/destroy`, {method:'POST'}).then(r=>r.json());
     vid = null;
@@ -261,19 +261,28 @@ async function destroyGrid(){
   }
 }
 
+function stopGridPoll(){
+  if (gridPollHandle){ clearTimeout(gridPollHandle); gridPollHandle = null; }
+}
+
+async function gridPoll(){
+  if (!gridCars.length){ gridPollHandle = null; return; }
+  try {
+    const r = await fetch(`${API}/race/grid`).then(r=>r.json());
+    if (r && r.cars && r.cars.length){
+      gridCars = r.cars;
+      drawMinimap();
+    }
+  } catch(e){ /* ignore */ }
+  // Recursive setTimeout (same anti-stacking pattern as stepLoop) — only one
+  // grid poll in flight at a time. 500ms floor = 2Hz ceiling.
+  if (gridCars.length) gridPollHandle = setTimeout(gridPoll, 500);
+  else gridPollHandle = null;
+}
+
 function startGridPoll(){
   if (gridPollHandle) return;
-  // ~2Hz: refresh AI car positions on the minimap (player is updated each /step)
-  gridPollHandle = setInterval(async () => {
-    if (!gridCars.length) return;
-    try {
-      const r = await fetch(`${API}/race/grid`).then(r=>r.json());
-      if (r && r.cars && r.cars.length){
-        gridCars = r.cars;
-        drawMinimap();
-      }
-    } catch(e){ /* ignore */ }
-  }, 500);
+  gridPollHandle = setTimeout(gridPoll, 500);
 }
 
 $('#spawngrid').addEventListener('click', spawnGrid);
@@ -351,7 +360,7 @@ function updateCtrl(){
 }
 
 async function stepLoop(){
-  if (!vid) return;
+  if (!vid){ loopHandle = null; return; }
   updateCtrl();
   try {
     const r = await fetch(`${API}/step/${vid}`, {
@@ -361,6 +370,7 @@ async function stepLoop(){
     if (r.status === 404){
       console.warn('vehicle lost, re-spawning');
       vid = null;
+      loopHandle = null;
       spawn();
       return;
     }
@@ -386,13 +396,21 @@ async function stepLoop(){
       console.warn('step', r.status, await r.text());
     }
   } catch(e){ console.warn('step err', e); }
+  // Recursive setTimeout (not setInterval) — only schedule the next /step
+  // AFTER this one finishes. Under load this caps in-flight requests at 1
+  // instead of stacking indefinitely (the cause of the control lag after a
+  // few rounds of testing). 20ms floor keeps a 50Hz ceiling when CARLA is fast.
+  if (vid) loopHandle = setTimeout(stepLoop, 20);
+  else loopHandle = null;
 }
 
 let loopHandle = null;
 function startLoop(){
   if (loopHandle) return;
-  // ~20Hz control loop; WS frames paint independently
-  loopHandle = setInterval(stepLoop, 50);
+  loopHandle = setTimeout(stepLoop, 0);
+}
+function stopLoop(){
+  if (loopHandle){ clearTimeout(loopHandle); loopHandle = null; }
 }
 
 spawn();

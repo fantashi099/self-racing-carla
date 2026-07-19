@@ -113,7 +113,28 @@ async def _shutdown():
         pass
 
 
+def _destroy_sensor(sid: int) -> None:
+    """Best-effort stop + destroy a sensor actor. Drops it from the bridge
+    dicts so its cb stops firing and the JPEG buffer is freed."""
+    s = sensors.pop(sid, None)
+    if s is None:
+        return
+    actor = s.get("actor")
+    try:
+        if actor is not None:
+            actor.stop()
+            actor.destroy()
+    except Exception:
+        pass
+
+
 def _register_race_camera(cam, vehicle_id: int) -> None:
+    # Drop the previous camera on this vehicle so re-spawning /drive doesn't
+    # stack sensors (each old sensor kept its cb firing → server CPU climb +
+    # control lag after a few rounds of testing).
+    old_sid = vehicle_to_sensor.get(vehicle_id)
+    if old_sid is not None:
+        _destroy_sensor(old_sid)
     sid = cam.id
     sensors[sid] = {"actor": cam, "subscribers": set(), "latest_jpeg": None}
     vehicle_to_sensor[vehicle_id] = sid
@@ -488,6 +509,11 @@ def spawn_camera(body: dict):
         z=float(body.get("z", 2.5)),
     ))
     cam = w.spawn_actor(bp, transform, attach_to=parent)
+    # Drop the previous camera on this vehicle (same anti-stacking fix as
+    # _register_race_camera) so re-spawning /drive doesn't pile up sensors.
+    old_sid = vehicle_to_sensor.get(attach_to)
+    if old_sid is not None and old_sid != cam.id:
+        _destroy_sensor(old_sid)
     sid = cam.id
     sensors[sid] = {"actor": cam, "subscribers": set(), "latest_jpeg": None}
 
