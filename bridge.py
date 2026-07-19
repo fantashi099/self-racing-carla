@@ -177,6 +177,35 @@ def post_random_map():
     return {"map": name}
 
 
+def _clear_vehicles_near_spawn_points(world, num_cars: int, radius: float = 3.0) -> int:
+    """Destroy any vehicle within `radius` meters of the first num_cars spawn
+    points. CARLA state persists across bridge restarts, so leftover vehicles
+    from a prior session collide with spawn_grid. Best-effort, returns count.
+    """
+    spawn_pts = world.get_map().get_spawn_points()
+    pts = spawn_pts[:num_cars]
+    if not pts:
+        return 0
+    destroyed = 0
+    for actor in world.get_actors().filter("vehicle.*"):
+        try:
+            t = actor.get_transform()
+            ax, ay = t.location.x, t.location.y
+        except Exception:
+            continue
+        for sp in pts:
+            dx = ax - sp.location.x
+            dy = ay - sp.location.y
+            if dx * dx + dy * dy <= radius * radius:
+                try:
+                    actor.destroy()
+                    destroyed += 1
+                except Exception:
+                    pass
+                break
+    return destroyed
+
+
 @app.post("/race/grid")
 def post_race_grid(body: dict = None):
     """F2: spawn the race grid (1 player + N-1 AI) at distinct spawn points.
@@ -198,6 +227,7 @@ def post_race_grid(body: dict = None):
                 {"error": "grid already spawned; destroy first"}, status_code=409,
             )
         world = client.get_world()
+        _clear_vehicles_near_spawn_points(world, num_cars)
         try:
             spawns = spawn_grid(world, num_cars=num_cars)
         except ValueError as e:
