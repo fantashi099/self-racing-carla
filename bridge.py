@@ -100,31 +100,33 @@ _DRIVE_HTML = Path(__file__).with_name("index.html")
 _RACE_HTML = Path(__file__).with_name("race.html")
 
 
-@app.get("/drive", response_class=HTMLResponse)
-def drive_page():
-    return HTMLResponse(_RACE_HTML.read_text(), media_type="text/html")
-
-
 @app.get("/manual", response_class=HTMLResponse)
 def manual_page():
     return HTMLResponse(_DRIVE_HTML.read_text(), media_type="text/html")
 
 
-@app.get("/race", response_class=HTMLResponse)
-def race_page():
-    return HTMLResponse(_RACE_HTML.read_text(), media_type="text/html")
-
-
-# ── race mode router (F9) ─────────────────────────────────
-from carla_race.bridge_ext import init_race_manager, race_router  # noqa: E402
-
-init_race_manager(client, register_camera=_register_race_camera, carla_lock=_carla_lock)
-app.include_router(race_router)
-
-print(
-    "[bridge] RACE_EXCLUDE_MAPS=" + os.environ.get("RACE_EXCLUDE_MAPS", "<unset>"),
-    flush=True,
-)
+# Race mode endpoints (F9/F10) disabled 2026-07-19: re-enable per-feature only
+# after live CARLA verification with supervisor sign-off. See PROGRESS.md
+# "Session 2026-07-19 (later) — RESET + supervisor rule".
+#
+# @app.get("/drive", response_class=HTMLResponse)
+# def drive_page():
+#     return HTMLResponse(_RACE_HTML.read_text(), media_type="text/html")
+#
+# @app.get("/race", response_class=HTMLResponse)
+# def race_page():
+#     return HTMLResponse(_RACE_HTML.read_text(), media_type="text/html")
+#
+# # ── race mode router (F9) ─────────────────────────────────
+# from carla_race.bridge_ext import init_race_manager, race_router  # noqa: E402
+#
+# init_race_manager(client, register_camera=_register_race_camera, carla_lock=_carla_lock)
+# app.include_router(race_router)
+#
+# print(
+#     "[bridge] RACE_EXCLUDE_MAPS=" + os.environ.get("RACE_EXCLUDE_MAPS", "<unset>"),
+#     flush=True,
+# )
 
 
 # ── REST endpoints ────────────────────────────────────────
