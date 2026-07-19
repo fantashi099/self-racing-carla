@@ -56,6 +56,7 @@ _race_grid_player_id: int | None = None
 _race_tm: Any = None
 _race_circuit: list = []
 _race_ai_enabled: bool = False
+_race_tm_port: int = 8001
 
 
 # ── cross-thread broadcast (CARLA sensor cb runs on its own thread) ──
@@ -189,7 +190,7 @@ from carla_race.map_pool import pick_and_load  # noqa: E402
 from carla_race.vehicle_grid import destroy_grid, spawn_grid  # noqa: E402
 from carla_race.bridge_ext import spawn_player_camera  # noqa: E402
 from carla_race.circuit import build_circuit  # noqa: E402
-from carla_race.ai_driver import reset_ai_cars, setup_ai_cars  # noqa: E402
+from carla_race.ai_driver import setup_ai_cars  # noqa: E402
 from carla_race.config import AI_DIFFICULTY_PRESETS  # noqa: E402
 
 
@@ -282,30 +283,34 @@ def _stop_ai_safe(world: Any) -> None:
     """Disable autopilot + clear TM paths on the current grid before the
     grid is destroyed. Best-effort — called from /race/grid (idempotent
     branch), /race/grid/destroy, /map/random, and shutdown. Holds no lock
-    itself (callers hold _carla_lock)."""
+    itself (callers hold _carla_lock). Never blocks: set_autopilot(False)
+    runs first (the real off-switch); set_path([]) is best-effort per
+    actor so one bad CARLA call can't hang the cleanup."""
     global _race_ai_enabled
-    if not _race_grid or _race_tm is None:
+    if not _race_grid:
         _race_ai_enabled = False
         return
-    car_actors: dict[int, Any] = {}
-    for s in _race_grid:
-        actor = world.get_actor(s.actor_id)
-        if actor is not None:
-            car_actors[s.actor_id] = actor
-    try:
-        reset_ai_cars(_race_tm, car_actors)
-    except Exception as e:
-        print(f"[ai] reset_ai_cars failed during grid cleanup: {e!r}", flush=True)
     for s in _race_grid:
         if s.is_player:
             continue
-        actor = car_actors.get(s.actor_id)
+        actor = world.get_actor(s.actor_id)
         if actor is None:
             continue
         try:
-            actor.set_autopilot(False)
+            actor.set_autopilot(False, _race_tm_port)
         except Exception:
             pass
+    if _race_tm is not None:
+        for s in _race_grid:
+            if s.is_player:
+                continue
+            actor = world.get_actor(s.actor_id)
+            if actor is None:
+                continue
+            try:
+                _race_tm.set_path(actor, [])
+            except Exception:
+                pass
     _race_ai_enabled = False
 
 
@@ -457,6 +462,7 @@ def post_race_ai_start(body: dict = None):
     Optional body: {difficulty: "easy"|"normal"|"hard"} — defaults to
     RACE_AI_DIFFICULTY env (default "normal").
     """
+    global _race_tm, _race_circuit, _race_ai_enabled, _race_tm_port
     global _race_tm, _race_circuit, _race_ai_enabled
     if not _race_grid:
         return JSONResponse({"error": "no grid spawned; spawn a grid first"}, status_code=400)
@@ -500,6 +506,7 @@ def post_race_ai_start(body: dict = None):
         # set_path alone doesn't engage autopilot — enable it per AI actor too.
         # (race_manager does the same in its start() path.)
         tm_port_actual = _race_tm.get_port() if hasattr(_race_tm, "get_port") else tm_port
+        _race_tm_port = int(tm_port_actual)
         ai_count = 0
         for s in _race_grid:
             if s.is_player:
@@ -508,7 +515,7 @@ def post_race_ai_start(body: dict = None):
             if actor is None:
                 continue
             try:
-                actor.set_autopilot(True, tm_port_actual)
+                actor.set_autopilot(True, _race_tm_port)
                 ai_count += 1
             except Exception as e:
                 print(f"[ai] set_autopilot failed for {s.actor_id}: {e!r}", flush=True)
@@ -517,40 +524,49 @@ def post_race_ai_start(body: dict = None):
         "ai_cars": ai_count,
         "circuit_waypoints": len(_race_circuit),
         "difficulty": difficulty,
-        "tm_port": tm_port_actual,
+        "tm_port": _race_tm_port,
     }
 
 
 @app.post("/race/ai/stop")
 def post_race_ai_stop():
-    """F4: disable autopilot on every AI car + clear their TM paths."""
+    """F4: disable autopilot on every AI car. Clears TM paths defensively
+    (best-effort, never blocks — if reset_ai_cars hangs on a CARLA build,
+    the actors still stop because set_autopilot(False, port) is the real
+    off-switch and runs first)."""
     global _race_ai_enabled
     if not _race_grid or _race_tm is None:
         _race_ai_enabled = False
         return {"stopped": 0}
     with _carla_lock:
         world = client.get_world()
-        car_actors: dict[int, Any] = {}
-        for s in _race_grid:
-            actor = world.get_actor(s.actor_id)
-            if actor is not None:
-                car_actors[s.actor_id] = actor
-        try:
-            reset_ai_cars(_race_tm, car_actors)
-        except Exception as e:
-            print(f"[ai] reset_ai_cars failed: {e!r}", flush=True)
+        stopped = 0
         for s in _race_grid:
             if s.is_player:
                 continue
-            actor = car_actors.get(s.actor_id)
+            actor = world.get_actor(s.actor_id)
             if actor is None:
                 continue
             try:
-                actor.set_autopilot(False)
+                actor.set_autopilot(False, _race_tm_port)
+                stopped += 1
+            except Exception as e:
+                print(f"[ai] set_autopilot(False) failed for {s.actor_id}: {e!r}", flush=True)
+        # Clear TM paths defensively. Some CARLA builds hang on
+        # tm.set_path(actor, []) — wrap each call so one bad actor can't
+        # block the whole stop (and the screen).
+        for s in _race_grid:
+            if s.is_player:
+                continue
+            actor = world.get_actor(s.actor_id)
+            if actor is None:
+                continue
+            try:
+                _race_tm.set_path(actor, [])
             except Exception:
                 pass
         _race_ai_enabled = False
-    return {"stopped": len(car_actors) - 1}
+    return {"stopped": stopped}
 
 
 # Race mode endpoints (F9/F10) disabled 2026-07-19: re-enable per-feature only

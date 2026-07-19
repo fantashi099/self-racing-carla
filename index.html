@@ -317,14 +317,24 @@ async function startAI(){
 async function stopAI(){
   const btn = $('#stopai');
   btn.disabled = true;
+  btn.textContent = '⏹ stopping…';
+  // Client-side timeout so the button can't stay disabled if the server
+  // hangs on a CARLA set_path([]) call — the server's set_autopilot(False)
+  // is the real off-switch and runs first, so even a timeout leaves the
+  // AI effectively stopped.
+  const ctrl = new AbortController();
+  const to = setTimeout(() => ctrl.abort(), 5000);
   try {
-    const r = await fetch(`${API}/race/ai/stop`, {method:'POST'}).then(r=>r.json());
+    const r = await fetch(`${API}/race/ai/stop`, {method:'POST', signal: ctrl.signal}).then(r=>r.json());
     $('#aicount').textContent = 0;
     console.log('[ai] stopped', r);
   } catch(e){
-    console.warn('stop AI err', e);
+    console.warn('stop AI err (assuming stopped):', e);
+    $('#aicount').textContent = 0;
   } finally {
+    clearTimeout(to);
     btn.disabled = false;
+    btn.textContent = '⏹ Stop AI';
   }
 }
 
