@@ -202,6 +202,13 @@ def post_race_grid(body: dict = None):
             spawns = spawn_grid(world, num_cars=num_cars)
         except ValueError as e:
             return JSONResponse({"error": str(e)}, status_code=400)
+        except RuntimeError as e:
+            # CARLA collision at a spawn point — return 503 so the client can
+            # retry (destroy grid / reload map) rather than a 500 traceback.
+            return JSONResponse(
+                {"error": f"spawn_grid collided: {e}", "num_cars": num_cars},
+                status_code=503,
+            )
         _race_grid = list(spawns)
         _race_grid_player_id = spawns[0].actor_id if spawns else None
         cars = []
@@ -315,12 +322,28 @@ def spawn_vehicle(body: dict):
     if "color" in body:
         bp.set_attribute("color", body["color"])
     spawn_pts = w.get_map().get_spawn_points()
-    idx = body.get("spawn_index", 0)
-    if idx >= len(spawn_pts):
-        idx = 0
-    actor = w.spawn_actor(bp, spawn_pts[idx])
-    vehicles[actor.id] = actor
-    return {"id": actor.id, "type_id": actor.type_id}
+    if not spawn_pts:
+        return JSONResponse({"error": "no spawn points on this map"}, status_code=500)
+    start_idx = body.get("spawn_index", 0)
+    if start_idx >= len(spawn_pts):
+        start_idx = 0
+    # Retry on collision: walk every spawn point once starting at start_idx.
+    # CARLA raises RuntimeError("Spawn failed because of collision ...") when
+    # the spot is occupied (previous vehicle, debris, etc.).
+    last_err = ""
+    for offset in range(len(spawn_pts)):
+        idx = (start_idx + offset) % len(spawn_pts)
+        try:
+            actor = w.spawn_actor(bp, spawn_pts[idx])
+            vehicles[actor.id] = actor
+            return {"id": actor.id, "type_id": actor.type_id, "spawn_index": idx}
+        except RuntimeError as e:
+            last_err = str(e)
+            continue
+    return JSONResponse(
+        {"error": f"all {len(spawn_pts)} spawn points collided: {last_err}"},
+        status_code=503,
+    )
 
 
 @app.post("/spawn/camera")
