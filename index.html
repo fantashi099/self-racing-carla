@@ -19,6 +19,7 @@
   #mapbar button{padding:6px 10px;border:0;border-radius:4px;background:#36c;color:#fff;font:600 12px system-ui;cursor:pointer}
   #mapbar button:disabled{opacity:.5;cursor:wait}
   #mapname{color:#7ec;font-weight:600}
+  #minimap{position:absolute;bottom:60px;right:8px;width:180px;height:180px;background:rgba(0,0,0,.6);border:1px solid #444;border-radius:6px}
   #help{position:absolute;top:40px;right:8px;background:rgba(0,0,0,.55);padding:6px 10px;border-radius:6px;font-size:12px}
   #err{position:absolute;inset:0;display:none;align-items:center;justify-content:center;background:rgba(0,0,0,.8);text-align:center;padding:20px}
 </style>
@@ -39,11 +40,18 @@
     <button data-k="down" class="brk">▼ Brake</button>
   </div>
   <div id="err"></div>
+  <canvas id="minimap" width="180" height="180"></canvas>
 </div>
 <script>
 const $ = s => document.querySelector(s);
 const canvas = $('#c'), ctx = canvas.getContext('2d');
 const errEl = $('#err'), hudSpd = $('#spd'), hudFps = $('#fps'), hudCtl = $('#ctl');
+const mini = $('#minimap'), mctx = mini.getContext('2d');
+
+// Minimap state
+let roadSegs = [];
+let mapBounds = {min_x: 0, min_y: 0, max_x: 1, max_y: 1};
+let carPos = null;  // {x, y, yaw}
 
 // Resolve bridge base: same origin + path prefix by default, override via ?host=
 const params = new URLSearchParams(location.search);
@@ -78,6 +86,63 @@ async function loadMapName(){
     const r = await fetch(`${API}/map/current`).then(r=>r.json());
     if (r && r.map) $('#mapname').textContent = r.map;
   } catch(e){ /* ignore */ }
+  loadRoads();
+}
+
+async function loadRoads(){
+  try {
+    const r = await fetch(`${API}/map/roads`).then(r=>r.json());
+    if (!r || !r.bounds) return;
+    mapBounds = r.bounds;
+    roadSegs = r.segments || [];
+    drawMinimap();
+  } catch(e){ /* ignore */ }
+}
+
+function worldToMini(x, y){
+  const pad = 6;
+  const w = mini.width - pad*2, h = mini.height - pad*2;
+  const sx = w / Math.max(1e-6, mapBounds.max_x - mapBounds.min_x);
+  const sy = h / Math.max(1e-6, mapBounds.max_y - mapBounds.min_y);
+  // CARLA: x = forward, y = right. Map to minimap: x→right, y→down (flip y so north up is -y)
+  const mx = pad + (x - mapBounds.min_x) * sx;
+  const my = pad + (y - mapBounds.min_y) * sy;
+  return [mx, my];
+}
+
+function drawMinimap(){
+  mctx.clearRect(0,0,mini.width,mini.height);
+  if (!roadSegs.length) return;
+  mctx.strokeStyle = '#567';
+  mctx.lineWidth = 1;
+  mctx.beginPath();
+  for (const s of roadSegs){
+    const [x1, y1] = worldToMini(s[0], s[1]);
+    const [x2, y2] = worldToMini(s[2], s[3]);
+    mctx.moveTo(x1, y1);
+    mctx.lineTo(x2, y2);
+  }
+  mctx.stroke();
+  drawCar();
+}
+
+function drawCar(){
+  if (!carPos) return;
+  const [mx, my] = worldToMini(carPos.x, carPos.y);
+  // yaw: 0 = +x (right on minimap). Convert to canvas angle.
+  const ang = carPos.yaw * Math.PI / 180;
+  mctx.save();
+  mctx.translate(mx, my);
+  mctx.rotate(ang);
+  // arrow body
+  mctx.fillStyle = '#7ec';
+  mctx.beginPath();
+  mctx.moveTo(6, 0);
+  mctx.lineTo(-4, -4);
+  mctx.lineTo(-4, 4);
+  mctx.closePath();
+  mctx.fill();
+  mctx.restore();
 }
 
 async function randomMap(){
@@ -93,6 +158,9 @@ async function randomMap(){
       if (ws) { ws.close(); ws = null; }
       if (loopHandle) { clearInterval(loopHandle); loopHandle = null; }
       ctx.clearRect(0,0,canvas.width,canvas.height);
+      carPos = null;
+      mctx.clearRect(0,0,mini.width,mini.height);
+      await loadRoads();
       await spawn();
     } else {
       showErr('random map failed: ' + JSON.stringify(r));
@@ -182,6 +250,15 @@ async function stepLoop(){
     if (r.ok){
       const spd = r.headers.get('X-Speed-Kmh');
       if (spd) hudSpd.textContent = spd;
+      const px = r.headers.get('X-Pos-X');
+      const py = r.headers.get('X-Pos-Y');
+      const pyaw = r.headers.get('X-Pos-Yaw');
+      if (px && py && pyaw){
+        const newPos = {x: parseFloat(px), y: parseFloat(py), yaw: parseFloat(pyaw)};
+        const moved = !carPos || Math.hypot(newPos.x - carPos.x, newPos.y - carPos.y) > 0.01;
+        carPos = newPos;
+        if (moved) drawMinimap();
+      }
       const buf = await r.arrayBuffer();
       const blob = new Blob([buf], {type:'image/jpeg'});
       const url = URL.createObjectURL(blob);

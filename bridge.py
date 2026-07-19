@@ -123,6 +123,37 @@ def get_current_map():
     return {"map": w.get_map().name.rsplit("/", 1)[-1]}
 
 
+@app.get("/map/roads")
+def get_map_roads():
+    """Road network skeleton for the /drive minimap.
+
+    Returns bounds (world coords) + line segments from map.get_topology()
+    (entry→exit waypoint per road). Client scales to its minimap canvas.
+    """
+    with _carla_lock:
+        m = client.get_world().get_map()
+        topo = m.get_topology()
+    segs = []
+    xs = []
+    ys = []
+    for entry, exit_ in topo:
+        el = entry.transform.location
+        xl = exit_.transform.location
+        segs.append([round(el.x, 2), round(el.y, 2),
+                      round(xl.x, 2), round(xl.y, 2)])
+        xs.extend((el.x, xl.x))
+        ys.extend((el.y, xl.y))
+    if not xs or not ys:
+        return {"bounds": {"min_x": 0, "min_y": 0, "max_x": 1, "max_y": 1}, "segments": []}
+    return {
+        "bounds": {
+            "min_x": round(min(xs), 2), "max_x": round(max(xs), 2),
+            "min_y": round(min(ys), 2), "max_y": round(max(ys), 2),
+        },
+        "segments": segs,
+    }
+
+
 @app.post("/map/random")
 def post_random_map():
     """F1: pick a random map (RACE_EXCLUDE_MAPS filter) and load it.
@@ -276,6 +307,10 @@ def step(vid: int, body: dict):
         with _carla_lock:
             v.apply_control(ctrl)
             speed_kmh = round(v.get_velocity().length() * 3.6, 1)
+            tf = v.get_transform()
+            pos_x = round(tf.location.x, 2)
+            pos_y = round(tf.location.y, 2)
+            yaw_deg = round(tf.rotation.yaw, 1)
     except Exception as exc:
         print(f"[step] control/velocity failed for vid {vid}: {exc!r}", flush=True)
         return JSONResponse(
@@ -284,15 +319,19 @@ def step(vid: int, body: dict):
 
     sid = vehicle_to_sensor.get(vid)
     jpeg = sensors.get(sid, {}).get("latest_jpeg") if sid else None
+    pos_headers = {
+        "X-Speed-Kmh": str(speed_kmh),
+        "X-Pos-X": str(pos_x),
+        "X-Pos-Y": str(pos_y),
+        "X-Pos-Yaw": str(yaw_deg),
+        "Access-Control-Expose-Headers": "X-Speed-Kmh, X-Pos-X, X-Pos-Y, X-Pos-Yaw",
+    }
     if jpeg is None:
         return JSONResponse(
             {"error": "no frame yet", "speed_kmh": speed_kmh}, status_code=503,
-            headers={"X-Speed-Kmh": str(speed_kmh)},
+            headers=pos_headers,
         )
-    return Response(
-        content=jpeg, media_type="image/jpeg",
-        headers={"X-Speed-Kmh": str(speed_kmh)},
-    )
+    return Response(content=jpeg, media_type="image/jpeg", headers=pos_headers)
 
 
 @app.post("/control/vehicle/{vid}")
