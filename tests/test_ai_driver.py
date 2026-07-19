@@ -54,6 +54,12 @@ class FakeTM:
         if hasattr(actor, "id"):
             self.paths[actor.id] = path
 
+    def vehicle_percentage_speed_difference(self, actor: Any, value: float) -> None:
+        self.calls.append(("vehicle_percentage_speed_difference", (actor, value)))
+        self.method_calls.setdefault("vehicle_percentage_speed_difference", []).append(
+            (actor, value)
+        )
+
     def __getattr__(self, name: str) -> Any:
         if name.startswith("set_"):
             def _record(*args: Any) -> None:
@@ -108,7 +114,7 @@ def test_setup_ai_cars_applies_all_preset_keys_per_ai_car() -> None:
         player_actor_id=1,
     )
     expected_keys = {
-        "set_desired_speed",
+        "vehicle_percentage_speed_difference",
         "set_global_distance_to_leading_vehicle",
     }
     applied_keys = {name for (name, _args) in tm.calls if name != "set_path"}
@@ -130,8 +136,8 @@ def test_setup_ai_cars_easy_preset_values() -> None:
         difficulty="easy",
         player_actor_id=999,
     )
-    speed_calls = tm.method_calls["set_desired_speed"]
-    assert speed_calls[0][1] == 40.0
+    speed_calls = tm.method_calls["vehicle_percentage_speed_difference"]
+    assert speed_calls[0][1] == 0.0
     dist_calls = tm.method_calls["set_global_distance_to_leading_vehicle"]
     assert dist_calls[0][1] == 5.0
 
@@ -146,7 +152,7 @@ def test_setup_ai_cars_hard_preset_values() -> None:
         difficulty="hard",
         player_actor_id=999,
     )
-    assert tm.method_calls["set_desired_speed"][0][1] == 75.0
+    assert tm.method_calls["vehicle_percentage_speed_difference"][0][1] == -50.0
     assert tm.method_calls["set_global_distance_to_leading_vehicle"][0][1] == 2.0
 
 
@@ -160,7 +166,7 @@ def test_setup_ai_cars_normal_uses_racing_speed() -> None:
         difficulty="normal",
         player_actor_id=999,
     )
-    assert tm.method_calls["set_desired_speed"][0][1] == 60.0
+    assert tm.method_calls["vehicle_percentage_speed_difference"][0][1] == -30.0
 
 
 def test_setup_ai_cars_set_path_converts_circuit_to_locations_and_closes_loop() -> None:
@@ -237,7 +243,7 @@ def test_setup_ai_cars_player_only_no_ai_calls() -> None:
         player_actor_id=1,
     )
     assert "set_path" not in tm.method_calls
-    assert "set_desired_speed" not in tm.method_calls
+    assert "vehicle_percentage_speed_difference" not in tm.method_calls
     assert tm.hybrid_physics_mode == [True]
 
 
@@ -254,7 +260,7 @@ def test_setup_ai_cars_skips_set_path_when_circuit_empty() -> None:
     # no circuit → no path → set_path skipped
     assert "set_path" not in tm.method_calls
     # but preset keys still applied
-    assert "set_desired_speed" in tm.method_calls
+    assert "vehicle_percentage_speed_difference" in tm.method_calls
 
 
 def test_reset_ai_cars_clears_path_for_each() -> None:
@@ -289,7 +295,7 @@ def test_setup_ai_cars_skips_missing_tm_methods(
 
         def set_path(self, actor: Any, path: list[Any], empty_buffer: bool = True) -> None:
             pass
-        # no set_desired_speed, set_global_distance_to_leading_vehicle
+        # no speed-difference or leading-distance methods
 
     tm = PartialTM()
     setup_ai_cars(
@@ -302,8 +308,8 @@ def test_setup_ai_cars_skips_missing_tm_methods(
     )
     assert tm.hybrid_physics_mode == [True]
     captured = capfd.readouterr()
-    assert "TM has no set_desired_speed" in captured.err
-    assert "Available set_ methods" in captured.err
+    assert "TM has no method for percentage_speed_difference" in captured.err
+    assert "Available matching methods" in captured.err
 
 
 def test_setup_ai_cars_missing_method_warning_emitted_once(
@@ -326,6 +332,6 @@ def test_setup_ai_cars_missing_method_warning_emitted_once(
         player_actor_id=999,
     )
     captured = capfd.readouterr()
-    err_lines = [l for l in captured.err.splitlines() if "TM has no" in l]
+    err_lines = [line for line in captured.err.splitlines() if "TM has no" in line]
     # 2 preset keys missing → 2 warnings (one per key)
     assert len(err_lines) == 2

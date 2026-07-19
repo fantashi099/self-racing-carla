@@ -43,14 +43,24 @@ _warned_missing: set[str] = set()
 
 
 def _apply_preset_key(tm: Any, key: str, actor: Any, value: Any) -> None:
-    method = getattr(tm, f"set_{key}", None)
+    method_name = f"set_{key}"
+    if key == "percentage_speed_difference":
+        method_name = "vehicle_percentage_speed_difference"
+    method = getattr(tm, method_name, None)
+    if method is None and key == "percentage_speed_difference":
+        method_name = "set_percentage_speed_difference"
+        method = getattr(tm, method_name, None)
     if method is None:
         if key not in _warned_missing:
             _warned_missing.add(key)
-            available = [m for m in dir(tm) if m.startswith("set_")]
+            available = [
+                m
+                for m in dir(tm)
+                if m.startswith("set_") or "speed_difference" in m
+            ]
             print(
-                f"[ai_driver] TM has no set_{key}; skipping. "
-                f"Available set_ methods: {available}",
+                f"[ai_driver] TM has no method for {key}; skipping. "
+                f"Available matching methods: {available}",
                 file=sys.stderr,
             )
         return

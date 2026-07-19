@@ -35,7 +35,8 @@ DIFFICULTIES: tuple[str, ...] = ("easy", "normal", "hard")
 
 # TrafficManager parameters per difficulty. Keys mirror the real CARLA
 # TrafficManager API (verified against CARLA 0.9.15 build at L2):
-# - desired_speed: target speed in km/h. easy=40, normal=60, hard=75.
+# - percentage_speed_difference: relative to the road speed limit. Negative
+#   values are faster: easy=0%, normal=30% faster, hard=50% faster.
 # - global_distance_to_leading_vehicle: following gap in meters.
 # Note: this CARLA build's TM has no set_percentage_speed_difference,
 # set_auto_lane_change, or set_safety_mode — those were dropped. ai_driver
@@ -43,15 +44,15 @@ DIFFICULTIES: tuple[str, ...] = ("easy", "normal", "hard")
 # TM), so adding keys for other CARLA versions is safe.
 AI_DIFFICULTY_PRESETS: dict[str, dict[str, Any]] = {
     "easy": {
-        "desired_speed": 40.0,
+        "percentage_speed_difference": 0.0,
         "global_distance_to_leading_vehicle": 5.0,
     },
     "normal": {
-        "desired_speed": 60.0,
+        "percentage_speed_difference": -30.0,
         "global_distance_to_leading_vehicle": 3.0,
     },
     "hard": {
-        "desired_speed": 75.0,
+        "percentage_speed_difference": -50.0,
         "global_distance_to_leading_vehicle": 2.0,
     },
 }

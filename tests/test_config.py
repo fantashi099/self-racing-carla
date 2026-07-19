@@ -31,7 +31,7 @@ def test_difficulties_match_presets_keys() -> None:
 
 def test_presets_have_consistent_keys() -> None:
     expected = {
-        "desired_speed",
+        "percentage_speed_difference",
         "global_distance_to_leading_vehicle",
     }
     for name, preset in AI_DIFFICULTY_PRESETS.items():
@@ -39,10 +39,10 @@ def test_presets_have_consistent_keys() -> None:
 
 
 def test_easy_is_slowest_hard_is_fastest() -> None:
-    easy = AI_DIFFICULTY_PRESETS["easy"]["desired_speed"]
-    normal = AI_DIFFICULTY_PRESETS["normal"]["desired_speed"]
-    hard = AI_DIFFICULTY_PRESETS["hard"]["desired_speed"]
-    assert easy < normal < hard
+    easy = AI_DIFFICULTY_PRESETS["easy"]["percentage_speed_difference"]
+    normal = AI_DIFFICULTY_PRESETS["normal"]["percentage_speed_difference"]
+    hard = AI_DIFFICULTY_PRESETS["hard"]["percentage_speed_difference"]
+    assert easy > normal > hard
 
 
 def test_hard_has_smallest_following_gap() -> None:
