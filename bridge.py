@@ -156,6 +156,7 @@ def manual_page():
 # "Session 2026-07-19 (later) — RESET + supervisor rule".
 from carla_race.map_pool import pick_and_load  # noqa: E402
 from carla_race.vehicle_grid import destroy_grid, spawn_grid  # noqa: E402
+from carla_race.bridge_ext import spawn_player_camera  # noqa: E402
 
 
 @app.get("/map/current")
@@ -354,6 +355,27 @@ def post_race_grid_destroy():
         except Exception:
             pass
     return {"destroyed": count}
+
+
+@app.post("/race/camera/{vid}")
+def post_race_camera(vid: int):
+    """F3: 3rd-person chase camera attached to vehicle ``vid``.
+
+    Uses the F3 module (``spawn_player_camera``) with -8m / +3.5m defaults so
+    /drive gets a real behind+above chase view instead of the prior +1.5m
+    hood/first-person view. Wires the sensor into the bridge's JPEG buffer +
+    broadcast via ``_register_race_camera`` so /step + /stream keep working.
+    """
+    with _carla_lock:
+        world = client.get_world()
+        actor = world.get_actor(vid)
+    if actor is None:
+        return JSONResponse({"error": f"vehicle {vid} not found"}, status_code=404)
+    with _carla_lock:
+        cam_info = spawn_player_camera(
+            world, actor, register_camera=_register_race_camera,
+        )
+    return cam_info
 
 
 # Race mode endpoints (F9/F10) disabled 2026-07-19: re-enable per-feature only

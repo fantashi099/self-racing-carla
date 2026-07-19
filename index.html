@@ -84,7 +84,7 @@ async function spawn(){
   if (!sv || !sv.id){ showErr('cannot spawn vehicle at '+API); return; }
   vid = sv.id;
   // find or create camera attached to vid
-  const sc = await fetch(`${API}/spawn/camera`,{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({attach_to:vid,width:640,height:360,fov:90,x:1.5,z:2.5})}).then(r=>r.json());
+  const sc = await fetch(`${API}/race/camera/${vid}`,{method:'POST'}).then(r=>r.json());
   sensorId = sc.sensor_id;
   openStream();
   startLoop();
@@ -225,9 +225,9 @@ async function spawnGrid(){
     $('#gridcount').textContent = gridCars.length;
     drawMinimap();
 
-    // drive the grid player: attach a camera + start the control loop
+    // drive the grid player: attach a 3rd-person camera (F3) + start the control loop
     vid = r.player_id;
-    const sc = await fetch(`${API}/spawn/camera`,{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({attach_to:vid,width:640,height:360,fov:90,x:1.5,z:2.5})}).then(r=>r.json());
+    const sc = await fetch(`${API}/race/camera/${vid}`,{method:'POST'}).then(r=>r.json());
     sensorId = sc.sensor_id;
     openStream();
     startLoop();

@@ -41,9 +41,12 @@ CAMERA_BP = "sensor.camera.rgb"
 DEFAULT_CAM_WIDTH = 800
 DEFAULT_CAM_HEIGHT = 600
 DEFAULT_CAM_FOV = 90
-DEFAULT_CAM_X = -1.5  # behind the car
+# 3rd-person chase cam: behind the car (-x is rearward in CARLA's local frame)
+# and above (+z). -8m / +3.5m gives a clear view of the car + road ahead —
+# the prior -1.5 / +2.5 sat on the rear bumper and read as first-person.
+DEFAULT_CAM_X = -8.0
 DEFAULT_CAM_Y = 0.0
-DEFAULT_CAM_Z = 2.5  # above the car
+DEFAULT_CAM_Z = 3.5
 
 
 def init_race_manager(
@@ -79,10 +82,16 @@ def spawn_player_camera(
     width: int = DEFAULT_CAM_WIDTH,
     height: int = DEFAULT_CAM_HEIGHT,
     fov: int = DEFAULT_CAM_FOV,
+    register_camera: Any = None,
 ) -> dict[str, Any]:
     """Spawn a 3rd-person RGB camera attached to ``player_actor``. Returns
     ``{sensor_id, ws_path, frame_path}``. Mirrors bridge.py /spawn/camera but
-    with 3rd-person defaults (behind + above the car)."""
+    with 3rd-person defaults (behind + above the car).
+
+    ``register_camera`` overrides the module-global callback set by
+    ``init_race_manager`` so a caller (e.g. bridge.py /drive) can wire the
+    sensor into its own JPEG buffer + broadcast without initializing the
+    full race manager."""
     bp_lib = world.get_blueprint_library()
     bp = bp_lib.find(CAMERA_BP)
     bp.set_attribute("image_size_x", str(width))
@@ -92,8 +101,9 @@ def spawn_player_camera(
     transform = _make_camera_transform(DEFAULT_CAM_X, DEFAULT_CAM_Y, DEFAULT_CAM_Z)
     cam = world.spawn_actor(bp, transform, attach_to=player_actor)
     sid = cam.id
-    if _register_camera_fn is not None:
-        _register_camera_fn(cam, player_actor.id)
+    register_fn = register_camera if register_camera is not None else _register_camera_fn
+    if register_fn is not None:
+        register_fn(cam, player_actor.id)
     else:
         _register_camera_callback(cam, sid)
     return {
