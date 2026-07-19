@@ -254,6 +254,8 @@ async function destroyGrid(){
     $('#gridcount').textContent = 0;
     drawMinimap();
     ctx.clearRect(0,0,canvas.width,canvas.height);
+    // respawn a standalone vehicle so driving continues (grid player was destroyed)
+    await spawn();
   } finally {
     btn.disabled = false;
   }

@@ -222,11 +222,16 @@ def post_race_grid(body: dict = None):
 
     global _race_grid, _race_grid_player_id
     with _carla_lock:
-        if _race_grid:
-            return JSONResponse(
-                {"error": "grid already spawned; destroy first"}, status_code=409,
-            )
         world = client.get_world()
+        # Idempotent: if a grid is already spawned, destroy it first so
+        # re-clicking Spawn Grid gives a fresh grid instead of a 409 or a
+        # collision with the old grid's actors.
+        if _race_grid:
+            destroy_grid(world, _race_grid)
+            for s in _race_grid:
+                vehicles.pop(s.actor_id, None)
+            _race_grid = []
+            _race_grid_player_id = None
         _clear_vehicles_near_spawn_points(world, num_cars)
         try:
             spawns = spawn_grid(world, num_cars=num_cars)
