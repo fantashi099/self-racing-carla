@@ -47,6 +47,12 @@ vehicle_to_sensor: Dict[int, int] = {} # vehicle_id -> primary camera sensor_id
 _loop: asyncio.AbstractEventLoop = None
 _carla_lock = threading.RLock()
 
+# F2 grid state — set of currently-spawned race cars (player + AI). Lives
+# outside `vehicles` because the grid is spawned/destroyed as a unit and
+# the /drive minimap polls it for AI car positions.
+_race_grid: list = []  # list[CarSpawn]
+_race_grid_player_id: int | None = None
+
 
 # ── cross-thread broadcast (CARLA sensor cb runs on its own thread) ──
 def _broadcast(sensor_id: int, jpeg: bytes):
@@ -115,6 +121,7 @@ def manual_page():
 # is live-verified with supervisor sign-off. See PROGRESS.md
 # "Session 2026-07-19 (later) — RESET + supervisor rule".
 from carla_race.map_pool import pick_and_load  # noqa: E402
+from carla_race.vehicle_grid import destroy_grid, spawn_grid  # noqa: E402
 
 
 @app.get("/map/current")
@@ -163,7 +170,96 @@ def post_random_map():
     """
     with _carla_lock:
         name, _carla_map = pick_and_load(client)
+        # load_world destroys all actors — drop the grid bookkeeping too.
+        global _race_grid, _race_grid_player_id
+        _race_grid = []
+        _race_grid_player_id = None
     return {"map": name}
+
+
+@app.post("/race/grid")
+def post_race_grid(body: dict = None):
+    """F2: spawn the race grid (1 player + N-1 AI) at distinct spawn points.
+
+    num_cars defaults to RACE_NUM_CARS env (or 10), override via body {num_cars}.
+    Returns the player's actor_id (the car the /drive client drives) plus the
+    full grid with spawn positions so the minimap can plot all cars.
+    """
+    body = body or {}
+    default_n = int(os.environ.get("RACE_NUM_CARS", "10"))
+    num_cars = int(body.get("num_cars", default_n))
+    if num_cars < 1:
+        return JSONResponse({"error": "num_cars must be >= 1"}, status_code=400)
+
+    global _race_grid, _race_grid_player_id
+    with _carla_lock:
+        if _race_grid:
+            return JSONResponse(
+                {"error": "grid already spawned; destroy first"}, status_code=409,
+            )
+        world = client.get_world()
+        try:
+            spawns = spawn_grid(world, num_cars=num_cars)
+        except ValueError as e:
+            return JSONResponse({"error": str(e)}, status_code=400)
+        _race_grid = list(spawns)
+        _race_grid_player_id = spawns[0].actor_id if spawns else None
+        cars = []
+        for s in spawns:
+            actor = world.get_actor(s.actor_id)
+            tf = actor.get_transform() if actor is not None else None
+            cars.append({
+                "actor_id": s.actor_id,
+                "is_player": s.is_player,
+                "color": s.color,
+                "spawn_index": s.spawn_index,
+                "x": round(tf.location.x, 2) if tf else 0.0,
+                "y": round(tf.location.y, 2) if tf else 0.0,
+                "yaw": round(tf.rotation.yaw, 1) if tf else 0.0,
+            })
+    return {"player_id": _race_grid_player_id, "cars": cars}
+
+
+@app.get("/race/grid")
+def get_race_grid():
+    """F2: live positions of every grid car for minimap polling."""
+    if not _race_grid:
+        return {"cars": []}
+    out = []
+    with _carla_lock:
+        world = client.get_world()
+        for s in _race_grid:
+            actor = world.get_actor(s.actor_id)
+            if actor is None:
+                continue
+            tf = actor.get_transform()
+            out.append({
+                "actor_id": s.actor_id,
+                "is_player": s.is_player,
+                "color": s.color,
+                "x": round(tf.location.x, 2),
+                "y": round(tf.location.y, 2),
+                "yaw": round(tf.rotation.yaw, 1),
+            })
+    return {"cars": out}
+
+
+@app.post("/race/grid/destroy")
+def post_race_grid_destroy():
+    """F2: destroy the current grid (best-effort, missing actors ignored)."""
+    global _race_grid, _race_grid_player_id
+    if not _race_grid:
+        return {"destroyed": 0}
+    with _carla_lock:
+        world = client.get_world()
+        count = len(_race_grid)
+        destroy_grid(world, _race_grid)
+        # also drop from the manual vehicles dict if present
+        for s in _race_grid:
+            vehicles.pop(s.actor_id, None)
+        _race_grid = []
+        _race_grid_player_id = None
+    return {"destroyed": count}
 
 
 # Race mode endpoints (F9/F10) disabled 2026-07-19: re-enable per-feature only
@@ -240,6 +336,17 @@ def spawn_camera(body: dict):
     if attach_to is None:
         return JSONResponse({"error": "attach_to required (vehicle id)"}, status_code=400)
     parent = vehicles.get(attach_to)
+    if parent is None:
+        # F2: grid cars aren't in `vehicles` — resolve via world.get_actor
+        # (same fallback /step uses) so the camera can attach to the grid player.
+        try:
+            with _carla_lock:
+                parent = w.get_actor(attach_to)
+        except Exception as exc:
+            return JSONResponse(
+                {"error": f"could not resolve vehicle {attach_to}: {exc!r}"},
+                status_code=503,
+            )
     if parent is None:
         return JSONResponse({"error": f"vehicle {attach_to} not found"}, status_code=404)
 

@@ -19,6 +19,10 @@
   #mapbar button{padding:6px 10px;border:0;border-radius:4px;background:#36c;color:#fff;font:600 12px system-ui;cursor:pointer}
   #mapbar button:disabled{opacity:.5;cursor:wait}
   #mapname{color:#7ec;font-weight:600}
+  #gridbar{position:absolute;top:40px;left:8px;display:flex;gap:8px;align-items:center;background:rgba(0,0,0,.55);padding:6px 10px;border-radius:6px;font-size:12px}
+  #gridbar button{padding:6px 10px;border:0;border-radius:4px;background:#36c;color:#fff;font:600 12px system-ui;cursor:pointer}
+  #gridbar button:disabled{opacity:.5;cursor:wait}
+  #gridcount{color:#7ec;font-weight:600}
   #minimap{position:absolute;bottom:60px;right:8px;width:180px;height:180px;background:rgba(0,0,0,.6);border:1px solid #444;border-radius:6px}
   #help{position:absolute;top:40px;right:8px;background:rgba(0,0,0,.55);padding:6px 10px;border-radius:6px;font-size:12px}
   #err{position:absolute;inset:0;display:none;align-items:center;justify-content:center;background:rgba(0,0,0,.8);text-align:center;padding:20px}
@@ -31,6 +35,11 @@
   <div id="mapbar">
     <span>map: <b id="mapname">--</b></span>
     <button id="randmap" title="Load a random map (F1)">🔄 Random Map</button>
+  </div>
+  <div id="gridbar">
+    <button id="spawngrid" title="Spawn race grid (F2)">🏁 Spawn Grid</button>
+    <button id="destroygrid" title="Destroy grid (F2)">🗑 Destroy Grid</button>
+    <span>grid: <b id="gridcount">0</b></span>
   </div>
   <div id="help">WASD/Arrows · Space brake · R reverse · Enter spawn</div>
   <div id="bar">
@@ -51,7 +60,8 @@ const mini = $('#minimap'), mctx = mini.getContext('2d');
 // Minimap state
 let roadSegs = [];
 let mapBounds = {min_x: 0, min_y: 0, max_x: 1, max_y: 1};
-let carPos = null;  // {x, y, yaw}
+let carPos = null;  // {x, y, yaw} — player car (driven)
+let gridCars = []; // [{actor_id, is_player, color, x, y, yaw}] — AI + player from F2 grid
 
 // Resolve bridge base: same origin + path prefix by default, override via ?host=
 const params = new URLSearchParams(location.search);
@@ -123,6 +133,15 @@ function drawMinimap(){
     mctx.lineTo(x2, y2);
   }
   mctx.stroke();
+  // F2: draw grid AI cars as colored dots (player drawn last as arrow)
+  for (const c of gridCars){
+    if (c.is_player) continue;
+    const [mx, my] = worldToMini(c.x, c.y);
+    mctx.fillStyle = `rgb(${c.color})`;
+    mctx.beginPath();
+    mctx.arc(mx, my, 3, 0, Math.PI*2);
+    mctx.fill();
+  }
   drawCar();
 }
 
@@ -157,8 +176,11 @@ async function randomMap(){
       vid = null;
       if (ws) { ws.close(); ws = null; }
       if (loopHandle) { clearInterval(loopHandle); loopHandle = null; }
+      if (gridPollHandle) { clearInterval(gridPollHandle); gridPollHandle = null; }
       ctx.clearRect(0,0,canvas.width,canvas.height);
       carPos = null;
+      gridCars = [];
+      $('#gridcount').textContent = 0;
       mctx.clearRect(0,0,mini.width,mini.height);
       await loadRoads();
       await spawn();
@@ -175,6 +197,85 @@ async function randomMap(){
 
 $('#randmap').addEventListener('click', randomMap);
 loadMapName();
+
+// F2 — race grid spawn/destroy + minimap polling.
+let gridPollHandle = null;
+
+async function spawnGrid(){
+  const btn = $('#spawngrid');
+  btn.disabled = true;
+  btn.textContent = '🏁 spawning…';
+  try {
+    // drop the single-vehicle spawn if present so the grid's player takes over
+    if (vid) {
+      try { await fetch(`${API}/destroy/${vid}`, {method:'POST'}); } catch(e){}
+      vid = null;
+    }
+    if (ws) { ws.close(); ws = null; }
+    if (loopHandle) { clearInterval(loopHandle); loopHandle = null; }
+
+    const r = await fetch(`${API}/race/grid`, {
+      method:'POST', headers:{'content-type':'application/json'}, body:'{}'
+    }).then(r=>r.json());
+    if (!r || !r.player_id){
+      showErr('spawn grid failed: ' + JSON.stringify(r));
+      return;
+    }
+    gridCars = (r.cars || []).slice();
+    $('#gridcount').textContent = gridCars.length;
+    drawMinimap();
+
+    // drive the grid player: attach a camera + start the control loop
+    vid = r.player_id;
+    const sc = await fetch(`${API}/spawn/camera`,{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({attach_to:vid,width:640,height:360,fov:90,x:1.5,z:2.5})}).then(r=>r.json());
+    sensorId = sc.sensor_id;
+    openStream();
+    startLoop();
+    startGridPoll();
+    hideErr();
+  } catch(e){
+    showErr('spawn grid error: ' + e);
+  } finally {
+    btn.disabled = false;
+    btn.textContent = '🏁 Spawn Grid';
+  }
+}
+
+async function destroyGrid(){
+  const btn = $('#destroygrid');
+  btn.disabled = true;
+  try {
+    if (loopHandle) { clearInterval(loopHandle); loopHandle = null; }
+    if (gridPollHandle) { clearInterval(gridPollHandle); gridPollHandle = null; }
+    if (ws) { ws.close(); ws = null; }
+    await fetch(`${API}/race/grid/destroy`, {method:'POST'}).then(r=>r.json());
+    vid = null;
+    gridCars = [];
+    $('#gridcount').textContent = 0;
+    drawMinimap();
+    ctx.clearRect(0,0,canvas.width,canvas.height);
+  } finally {
+    btn.disabled = false;
+  }
+}
+
+function startGridPoll(){
+  if (gridPollHandle) return;
+  // ~2Hz: refresh AI car positions on the minimap (player is updated each /step)
+  gridPollHandle = setInterval(async () => {
+    if (!gridCars.length) return;
+    try {
+      const r = await fetch(`${API}/race/grid`).then(r=>r.json());
+      if (r && r.cars && r.cars.length){
+        gridCars = r.cars;
+        drawMinimap();
+      }
+    } catch(e){ /* ignore */ }
+  }, 500);
+}
+
+$('#spawngrid').addEventListener('click', spawnGrid);
+$('#destroygrid').addEventListener('click', destroyGrid);
 
 function openStream(){
   if (ws) ws.close();
