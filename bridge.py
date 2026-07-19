@@ -58,7 +58,13 @@ _race_grid_player_id: int | None = None
 def _broadcast(sensor_id: int, jpeg: bytes):
     if _loop is None:
         return
-    asyncio.run_coroutine_threadsafe(_async_broadcast(sensor_id, jpeg), _loop)
+    try:
+        asyncio.run_coroutine_threadsafe(_async_broadcast(sensor_id, jpeg), _loop)
+    except RuntimeError:
+        # Loop is closing/closed (Ctrl+C shutdown). The CARLA sensor thread
+        # keeps firing until the actor is destroyed; swallow the late frames
+        # so shutdown doesn't spam "Event loop is closed" + segfault.
+        return
 
 
 async def _async_broadcast(sensor_id: int, jpeg: bytes):
@@ -77,6 +83,34 @@ async def _async_broadcast(sensor_id: int, jpeg: bytes):
 async def _startup():
     global _loop
     _loop = asyncio.get_event_loop()
+
+
+@app.on_event("shutdown")
+async def _shutdown():
+    # Stop every sensor listener so the CARLA sensor thread stops firing cb
+    # after the asyncio loop is gone (prevents the "Event loop is closed"
+    # spam + segfault on Ctrl+C). Best-effort — missing/destroyed sensors
+    # are ignored. Also destroy the F2 grid so CARLA doesn't carry leftover
+    # vehicles across bridge restarts.
+    global _race_grid, _race_grid_player_id
+    try:
+        with _carla_lock:
+            for s in list(sensors.values()):
+                actor = s.get("actor")
+                try:
+                    if actor is not None:
+                        actor.stop()
+                except Exception:
+                    pass
+            if _race_grid:
+                try:
+                    destroy_grid(client.get_world(), _race_grid)
+                except Exception:
+                    pass
+                _race_grid = []
+                _race_grid_player_id = None
+    except Exception:
+        pass
 
 
 def _register_race_camera(cam, vehicle_id: int) -> None:
