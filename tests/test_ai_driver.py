@@ -131,7 +131,7 @@ def test_setup_ai_cars_easy_preset_values() -> None:
         player_actor_id=999,
     )
     speed_calls = tm.method_calls["set_desired_speed"]
-    assert speed_calls[0][1] == 50.0
+    assert speed_calls[0][1] == 40.0
     dist_calls = tm.method_calls["set_global_distance_to_leading_vehicle"]
     assert dist_calls[0][1] == 5.0
 
@@ -146,7 +146,7 @@ def test_setup_ai_cars_hard_preset_values() -> None:
         difficulty="hard",
         player_actor_id=999,
     )
-    assert tm.method_calls["set_desired_speed"][0][1] == 110.0
+    assert tm.method_calls["set_desired_speed"][0][1] == 75.0
     assert tm.method_calls["set_global_distance_to_leading_vehicle"][0][1] == 2.0
 
 
@@ -160,7 +160,7 @@ def test_setup_ai_cars_normal_uses_racing_speed() -> None:
         difficulty="normal",
         player_actor_id=999,
     )
-    assert tm.method_calls["set_desired_speed"][0][1] == 80.0
+    assert tm.method_calls["set_desired_speed"][0][1] == 60.0
 
 
 def test_setup_ai_cars_set_path_converts_circuit_to_locations_and_closes_loop() -> None:

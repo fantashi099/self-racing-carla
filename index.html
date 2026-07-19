@@ -297,9 +297,17 @@ async function startAI(){
   btn.disabled = true;
   btn.textContent = '🤖 starting…';
   try {
-    const r = await fetch(`${API}/race/ai/start`, {
+    const response = await fetch(`${API}/race/ai/start`, {
       method:'POST', headers:{'content-type':'application/json'}, body:'{}'
-    }).then(r=>r.json());
+    });
+    const responseText = await response.text();
+    let r;
+    try {
+      r = JSON.parse(responseText);
+    } catch {
+      throw new Error(`HTTP ${response.status}: ${responseText || 'empty response'}`);
+    }
+    if (!response.ok) throw new Error(`HTTP ${response.status}: ${r.error || responseText}`);
     if (r && typeof r.ai_cars === 'number'){
       $('#aicount').textContent = r.ai_cars;
       console.log(`[ai] started ${r.ai_cars} cars, waypoints=${r.circuit_waypoints}, diff=${r.difficulty}, tm_port=${r.tm_port}`);
