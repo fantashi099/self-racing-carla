@@ -279,6 +279,20 @@ function startGridPoll(){
 $('#spawngrid').addEventListener('click', spawnGrid);
 $('#destroygrid').addEventListener('click', destroyGrid);
 
+// On load, fetch any existing grid so a page reload keeps the minimap in sync
+// (the camera is gone, but the grid dots + count still show). User clicks
+// Spawn Grid for a fresh driveable grid.
+(async function loadGrid(){
+  try {
+    const r = await fetch(`${API}/race/grid`).then(r=>r.json());
+    if (r && r.cars && r.cars.length){
+      gridCars = r.cars;
+      $('#gridcount').textContent = gridCars.length;
+      drawMinimap();
+    }
+  } catch(e){ /* ignore */ }
+})();
+
 function openStream(){
   if (ws) ws.close();
   ws = new WebSocket(`${WS}/stream/${sensorId}`);

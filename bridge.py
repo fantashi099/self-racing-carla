@@ -232,7 +232,19 @@ def post_race_grid(body: dict = None):
                 vehicles.pop(s.actor_id, None)
             _race_grid = []
             _race_grid_player_id = None
+            # CARLA destroy() is async — the actor stays physically present
+            # until the sim advances a frame. Force a tick so spawn_grid
+            # doesn't collide with the just-destroyed actors.
+            try:
+                world.tick()
+            except Exception:
+                pass
         _clear_vehicles_near_spawn_points(world, num_cars)
+        # Second tick after leftover cleanup for the same async-destroy reason.
+        try:
+            world.tick()
+        except Exception:
+            pass
         try:
             spawns = spawn_grid(world, num_cars=num_cars)
         except ValueError as e:
@@ -301,6 +313,12 @@ def post_race_grid_destroy():
             vehicles.pop(s.actor_id, None)
         _race_grid = []
         _race_grid_player_id = None
+        # CARLA destroy() is async — tick so the next spawn (standalone vehicle
+        # from the /drive page's destroyGrid handler) doesn't collide.
+        try:
+            world.tick()
+        except Exception:
+            pass
     return {"destroyed": count}
 
 
